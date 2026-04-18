@@ -10,6 +10,7 @@ import { ImageAddon } from '@xterm/addon-image';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { OverlayAddon } from './addons/overlay';
 import { ZmodemAddon } from './addons/zmodem';
+import { bytesForKeyEvent } from '../../vkbd/actions';
 
 import '@xterm/xterm/css/xterm.css';
 
@@ -17,9 +18,26 @@ interface TtydTerminal extends Terminal {
     fit(): void;
 }
 
+export interface VirtualModHook {
+    getMods: () => { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean };
+    consume: () => void;
+}
+
+export interface TtydBridge {
+    sendBytes: (data: string | Uint8Array) => void;
+    scrollLines: (n: number) => void;
+    scrollPages: (n: number) => void;
+    scrollToBottom: () => void;
+    paste: () => Promise<void>;
+    copySelection: () => Promise<void>;
+    focus: () => void;
+    vkbdHook?: VirtualModHook;
+}
+
 declare global {
     interface Window {
         term: TtydTerminal;
+        ttyd: TtydBridge;
     }
 }
 
@@ -167,6 +185,84 @@ export class Xterm {
 
         terminal.open(parent);
         fitAddon.fit();
+
+        terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+            if (event.type !== 'keydown') return true;
+            const hook = window.ttyd?.vkbdHook;
+            if (!hook) return true;
+            const vm = hook.getMods();
+            if (!vm.ctrl && !vm.shift && !vm.alt && !vm.meta) return true;
+            const combined = {
+                ctrl: vm.ctrl || event.ctrlKey,
+                shift: vm.shift || event.shiftKey,
+                alt: vm.alt || event.altKey,
+                meta: vm.meta || event.metaKey,
+            };
+            const bytes = bytesForKeyEvent(event, combined);
+            if (bytes === null) return true;
+            event.preventDefault();
+            this.sendData(bytes);
+            hook.consume();
+            return false;
+        });
+
+        const getViewport = (): HTMLElement | null =>
+            (terminal.element?.querySelector('.xterm-viewport') as HTMLElement | null) ?? null;
+        const getRowHeight = (): number => {
+            const vp = getViewport();
+            if (!vp || terminal.rows <= 0) return 20;
+            return vp.clientHeight / terminal.rows;
+        };
+        const dispatchWheel = (deltaY: number) => {
+            const el = terminal.element;
+            if (!el) return;
+            const rect = el.getBoundingClientRect();
+            el.dispatchEvent(
+                new WheelEvent('wheel', {
+                    deltaY,
+                    deltaMode: 0,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                    bubbles: true,
+                    cancelable: true,
+                })
+            );
+        };
+
+        const prevHook = window.ttyd?.vkbdHook;
+        window.ttyd = {
+            sendBytes: data => this.sendData(data),
+            scrollLines: n => dispatchWheel(n * getRowHeight()),
+            scrollPages: n => {
+                const vp = getViewport();
+                const h = vp ? vp.clientHeight : getRowHeight() * terminal.rows;
+                dispatchWheel(n * h);
+            },
+            scrollToBottom: () => {
+                const vp = getViewport();
+                if (vp) vp.scrollTop = vp.scrollHeight;
+                else terminal.scrollToBottom();
+            },
+            paste: async () => {
+                try {
+                    const txt = await navigator.clipboard.readText();
+                    if (txt) this.sendData(txt);
+                } catch (e) {
+                    console.warn('[ttyd] paste failed', e);
+                }
+            },
+            copySelection: async () => {
+                const sel = terminal.getSelection();
+                if (!sel) return;
+                try {
+                    await navigator.clipboard.writeText(sel);
+                } catch (e) {
+                    console.warn('[ttyd] copy failed', e);
+                }
+            },
+            focus: () => terminal.focus(),
+            vkbdHook: prevHook,
+        };
     }
 
     @bind

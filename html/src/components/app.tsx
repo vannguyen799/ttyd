@@ -1,6 +1,7 @@
 import { h, Component } from 'preact';
 
 import { Terminal } from './terminal';
+import { VirtualKeyboard } from './vkbd';
 
 import type { ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { ClientOptions, FlowControl } from './terminal/xterm';
@@ -55,14 +56,17 @@ const flowControl = {
 export class App extends Component {
     render() {
         return (
-            <Terminal
-                id="terminal-container"
-                wsUrl={wsUrl}
-                tokenUrl={tokenUrl}
-                clientOptions={clientOptions}
-                termOptions={termOptions}
-                flowControl={flowControl}
-            />
+            <div class="app-root">
+                <Terminal
+                    id="terminal-container"
+                    wsUrl={wsUrl}
+                    tokenUrl={tokenUrl}
+                    clientOptions={clientOptions}
+                    termOptions={termOptions}
+                    flowControl={flowControl}
+                />
+                <VirtualKeyboard />
+            </div>
         );
     }
 }
