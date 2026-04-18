@@ -43,6 +43,13 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         timer: number;
         fired: boolean;
     } | null = null;
+    private scrollHold: {
+        pointerId: number;
+        target: Element;
+        def: KeyDef;
+        delayTimer: number;
+        intervalTimer: number;
+    } | null = null;
     private suppressNextClick = false;
 
     constructor() {
@@ -148,16 +155,67 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             this.suppressNextClick = false;
             return;
         }
-        const shouldClear = dispatch(k.action, {
+        this.fireKey(k);
+    };
+
+    private fireKey = (k: KeyDef) => {
+        const action = this.resolveAction(k.action);
+        const shouldClear = dispatch(action, {
             mods: this.state.mods,
             clearMods: this.clearMods,
             toggleMod: this.toggleMod,
             hideKeyboard: this.hide,
         });
         if (shouldClear) this.clearMods();
-        const t = k.action.type;
+        const t = action.type;
         const needsFocus = t === 'send' || t === 'text' || t === 'named' || t === 'paste';
         if (needsFocus) window.ttyd?.focus();
+    };
+
+    private resolveAction(a: KeyDef['action']): KeyDef['action'] {
+        if (a.type === 'scroll' && a.by === 'line' && a.amount === undefined) {
+            return { ...a, amount: this.state.settings.scrollStep };
+        }
+        return a;
+    }
+
+    private onScrollPointerDown = (k: KeyDef, e: PointerEvent) => {
+        if (k.action.type !== 'scroll') return;
+        const target = e.currentTarget as Element;
+        try {
+            target.setPointerCapture(e.pointerId);
+        } catch {
+            // ignore
+        }
+        this.suppressNextClick = true;
+        this.fireKey(k);
+        if (!this.state.settings.autoRepeat) return;
+        const delay = this.state.settings.repeatDelayMs;
+        const interval = this.state.settings.repeatIntervalMs;
+        const hold: NonNullable<typeof this.scrollHold> = {
+            pointerId: e.pointerId,
+            target,
+            def: k,
+            delayTimer: 0,
+            intervalTimer: 0,
+        };
+        hold.delayTimer = window.setTimeout(() => {
+            hold.intervalTimer = window.setInterval(() => this.fireKey(k), interval);
+        }, delay);
+        this.scrollHold = hold;
+    };
+
+    private onScrollPointerUp = (e: PointerEvent) => {
+        const hold = this.scrollHold;
+        if (!hold || hold.pointerId !== e.pointerId) return;
+        window.clearTimeout(hold.delayTimer);
+        window.clearInterval(hold.intervalTimer);
+        this.scrollHold = null;
+        try {
+            hold.target.releasePointerCapture(e.pointerId);
+        } catch {
+            // ignore
+        }
     };
 
     private onModPointerDown = (k: KeyDef, e: PointerEvent) => {
@@ -376,6 +434,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                     const active = this.isActive(def);
                                     const locked = this.isLocked(def);
                                     const isMod = def.action.type === 'mod';
+                                    const isScroll = def.action.type === 'scroll';
                                     const cls = [
                                         'vkbd-key',
                                         def.class || '',
@@ -386,6 +445,16 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                         .join(' ');
                                     const style: JSX.CSSProperties = { ...keyStyleBase };
                                     if (def.flex) style.flex = def.flex;
+                                    const onPointerDown = isMod
+                                        ? (e: PointerEvent) => this.onModPointerDown(def, e)
+                                        : isScroll
+                                        ? (e: PointerEvent) => this.onScrollPointerDown(def, e)
+                                        : undefined;
+                                    const onPointerUp = isMod
+                                        ? this.onModPointerUp
+                                        : isScroll
+                                        ? this.onScrollPointerUp
+                                        : undefined;
                                     return (
                                         <button
                                             key={id}
@@ -393,10 +462,10 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                             style={style}
                                             onClick={() => this.onKeyClick(def)}
                                             onDblClick={isMod ? () => this.onModDblClick(def) : undefined}
-                                            onPointerDown={isMod ? e => this.onModPointerDown(def, e) : undefined}
+                                            onPointerDown={onPointerDown}
                                             onPointerMove={isMod ? this.onModPointerMove : undefined}
-                                            onPointerUp={isMod ? this.onModPointerUp : undefined}
-                                            onPointerCancel={isMod ? this.onModPointerUp : undefined}
+                                            onPointerUp={onPointerUp}
+                                            onPointerCancel={onPointerUp}
                                             onMouseDown={e => e.preventDefault()}
                                         >
                                             <span class="vkbd-label">{def.label}</span>

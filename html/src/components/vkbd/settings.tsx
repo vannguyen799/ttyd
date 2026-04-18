@@ -201,6 +201,63 @@ export class SettingsPanel extends Component<Props, FormState> {
                 </div>
 
                 <div class="vkbd-section">
+                    <div class="vkbd-section-title">Scroll</div>
+                    <div class="vkbd-row-setting">
+                        <label>Lines/click</label>
+                        <input
+                            type="range"
+                            min="1"
+                            max="40"
+                            step="1"
+                            value={settings.scrollStep}
+                            onInput={e =>
+                                this.update({ scrollStep: parseInt((e.target as HTMLInputElement).value, 10) })
+                            }
+                        />
+                        <span class="vkbd-hint">{settings.scrollStep} line(s)</span>
+                    </div>
+                    <div class="vkbd-row-setting">
+                        <label>Auto-repeat</label>
+                        <input
+                            type="checkbox"
+                            checked={settings.autoRepeat}
+                            onChange={e => this.update({ autoRepeat: (e.target as HTMLInputElement).checked })}
+                        />
+                        <span class="vkbd-hint">hold scroll button to repeat</span>
+                    </div>
+                    <div class="vkbd-row-setting">
+                        <label>Hold delay</label>
+                        <input
+                            type="range"
+                            min="100"
+                            max="1000"
+                            step="50"
+                            value={settings.repeatDelayMs}
+                            disabled={!settings.autoRepeat}
+                            onInput={e =>
+                                this.update({ repeatDelayMs: parseInt((e.target as HTMLInputElement).value, 10) })
+                            }
+                        />
+                        <span class="vkbd-hint">{settings.repeatDelayMs}ms</span>
+                    </div>
+                    <div class="vkbd-row-setting">
+                        <label>Repeat rate</label>
+                        <input
+                            type="range"
+                            min="20"
+                            max="300"
+                            step="10"
+                            value={settings.repeatIntervalMs}
+                            disabled={!settings.autoRepeat}
+                            onInput={e =>
+                                this.update({ repeatIntervalMs: parseInt((e.target as HTMLInputElement).value, 10) })
+                            }
+                        />
+                        <span class="vkbd-hint">every {settings.repeatIntervalMs}ms</span>
+                    </div>
+                </div>
+
+                <div class="vkbd-section">
                     <div class="vkbd-section-title">
                         Built-in keys
                         <span class="vkbd-actions">

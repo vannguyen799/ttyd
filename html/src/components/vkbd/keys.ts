@@ -47,15 +47,15 @@ export const ROWS: KeyRow[] = [
         keys: [
             {
                 label: '▲ Scroll',
-                sub: 'wheel up',
-                action: { type: 'scroll', by: 'page', dir: -1 },
+                sub: 'hold = auto',
+                action: { type: 'scroll', by: 'line', dir: -1 },
                 class: 'scroll',
                 flex: 2,
             },
             {
                 label: '▼ Scroll',
-                sub: 'wheel down',
-                action: { type: 'scroll', by: 'page', dir: 1 },
+                sub: 'hold = auto',
+                action: { type: 'scroll', by: 'line', dir: 1 },
                 class: 'scroll',
                 flex: 2,
             },

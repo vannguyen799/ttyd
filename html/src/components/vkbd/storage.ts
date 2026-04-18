@@ -11,6 +11,10 @@ export interface Settings {
     pos: { x: number; y: number } | null;
     width: number | null;
     keyHeight: number | null;
+    scrollStep: number;
+    autoRepeat: boolean;
+    repeatDelayMs: number;
+    repeatIntervalMs: number;
 }
 
 function defaultVisible(): boolean {
@@ -39,6 +43,10 @@ const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width'> = {
     disabledIds: [],
     custom: [],
     keyHeight: null,
+    scrollStep: 5,
+    autoRepeat: true,
+    repeatDelayMs: 350,
+    repeatIntervalMs: 60,
 };
 
 export function keyId(rowIndex: number, keyIndex: number, def: KeyDef): string {
