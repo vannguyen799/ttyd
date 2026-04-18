@@ -16,14 +16,19 @@ export interface Settings {
     repeatDelayMs: number;
     repeatIntervalMs: number;
     showInput: boolean;
+    termFontSize: number | null;
 }
 
-function defaultVisible(): boolean {
+function isCoarse(): boolean {
     try {
         return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
     } catch {
         return false;
     }
+}
+
+function defaultVisible(): boolean {
+    return isCoarse();
 }
 
 function defaultFloating(): { pos: { x: number; y: number }; width: number } {
@@ -49,6 +54,7 @@ const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width'> = {
     repeatDelayMs: 350,
     repeatIntervalMs: 60,
     showInput: true,
+    termFontSize: null,
 };
 
 export function keyId(rowIndex: number, keyIndex: number, def: KeyDef): string {
@@ -56,12 +62,15 @@ export function keyId(rowIndex: number, keyIndex: number, def: KeyDef): string {
 }
 
 export function loadSettings(): Settings {
+    const coarse = isCoarse();
     const fd = defaultFloating();
     const base: Settings = {
         ...DEFAULTS_STATIC,
         visible: defaultVisible(),
-        pos: fd.pos,
-        width: fd.width,
+        // Mobile-first default: dock at bottom (split screen with terminal).
+        // Desktop default: float in center-bottom.
+        pos: coarse ? null : fd.pos,
+        width: coarse ? null : fd.width,
     };
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
@@ -74,6 +83,10 @@ export function loadSettings(): Settings {
 }
 
 export function resetLayout(current: Settings): Settings {
+    const coarse = isCoarse();
+    if (coarse) {
+        return { ...current, pos: null, width: null, keyHeight: null };
+    }
     const fd = defaultFloating();
     return { ...current, pos: fd.pos, width: fd.width, keyHeight: null };
 }
@@ -99,4 +112,23 @@ export function saveSettings(s: Settings): void {
 
 export function genId(): string {
     return `c:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const INPUT_KEY = 'ttyd.vkbd.input.v1';
+
+export function loadInputDraft(): string {
+    try {
+        return localStorage.getItem(INPUT_KEY) || '';
+    } catch {
+        return '';
+    }
+}
+
+export function saveInputDraft(text: string): void {
+    try {
+        if (text) localStorage.setItem(INPUT_KEY, text);
+        else localStorage.removeItem(INPUT_KEY);
+    } catch {
+        // ignore
+    }
 }

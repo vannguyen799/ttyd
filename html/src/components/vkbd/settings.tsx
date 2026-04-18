@@ -161,15 +161,26 @@ export class SettingsPanel extends Component<Props, FormState> {
                 <div class="vkbd-section">
                     <div class="vkbd-section-title">Appearance</div>
                     <div class="vkbd-row-setting">
-                        <label>Position</label>
+                        <label>Mode</label>
                         <select
-                            value={settings.position}
-                            onChange={e =>
-                                this.update({ position: (e.target as HTMLSelectElement).value as 'bottom' | 'top' })
-                            }
+                            value={settings.pos ? 'float' : settings.position === 'top' ? 'dock-top' : 'dock-bottom'}
+                            onChange={e => {
+                                const v = (e.target as HTMLSelectElement).value;
+                                if (v === 'float') {
+                                    const w = Math.min(window.innerWidth - 24, 520);
+                                    const x = Math.max(12, Math.round((window.innerWidth - w) / 2));
+                                    const y = Math.max(12, window.innerHeight - 240);
+                                    this.update({ pos: { x, y }, width: w });
+                                } else if (v === 'dock-top') {
+                                    this.update({ pos: null, position: 'top' });
+                                } else {
+                                    this.update({ pos: null, position: 'bottom' });
+                                }
+                            }}
                         >
-                            <option value="bottom">Bottom</option>
-                            <option value="top">Top</option>
+                            <option value="dock-bottom">Dock bottom (split)</option>
+                            <option value="dock-top">Dock top (split)</option>
+                            <option value="float">Float / drag (overlay)</option>
                         </select>
                     </div>
                     <div class="vkbd-row-setting">
@@ -187,15 +198,12 @@ export class SettingsPanel extends Component<Props, FormState> {
                     <div class="vkbd-row-setting">
                         <label>Layout</label>
                         <button class="vkbd-text-btn" onClick={props.onReset}>
-                            Reset to default
-                        </button>
-                        <button class="vkbd-text-btn" onClick={() => this.update({ pos: null })}>
-                            Dock {settings.position}
+                            Reset size
                         </button>
                         <span class="vkbd-hint">
                             {settings.pos
                                 ? `float · ${Math.round(settings.width || 0)}×${settings.keyHeight || 38}`
-                                : 'docked'}
+                                : `docked ${settings.position}`}
                         </span>
                     </div>
                     <div class="vkbd-row-setting">
@@ -206,6 +214,31 @@ export class SettingsPanel extends Component<Props, FormState> {
                             onChange={e => this.update({ showInput: (e.target as HTMLInputElement).checked })}
                         />
                         <span class="vkbd-hint">compose buffer + Send button</span>
+                    </div>
+                    <div class="vkbd-row-setting">
+                        <label>Term font</label>
+                        <input
+                            type="range"
+                            min="6"
+                            max="24"
+                            step="1"
+                            value={settings.termFontSize || 12}
+                            onInput={e =>
+                                this.update({ termFontSize: parseInt((e.target as HTMLInputElement).value, 10) })
+                            }
+                        />
+                        <span class="vkbd-hint">
+                            {settings.termFontSize ? `${settings.termFontSize}px` : 'auto'}
+                            {settings.termFontSize ? (
+                                <button
+                                    class="vkbd-text-btn"
+                                    onClick={() => this.update({ termFontSize: null })}
+                                    style={{ marginLeft: 6 }}
+                                >
+                                    reset
+                                </button>
+                            ) : null}
+                        </span>
                     </div>
                 </div>
 

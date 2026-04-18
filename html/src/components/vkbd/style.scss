@@ -59,8 +59,13 @@
   padding: 6px 10px;
   font-family: inherit;
   font-size: 14px;
+  line-height: 1.35;
   outline: none;
+  resize: none;
+  overflow-y: auto;
   -webkit-appearance: none;
+  min-height: 30px;
+  max-height: calc(1.35em * 3 + 14px);
 
   &:focus {
     border-color: #5a8dd6;
@@ -145,6 +150,25 @@
   min-height: 24px;
 }
 
+.vkbd-mods-badge {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: #e8a02f;
+  color: #101010;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 0 8px rgba(232, 160, 47, 0.5);
+  animation: vkbd-mods-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes vkbd-mods-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
 .vkbd-drag {
   flex: 1;
   text-align: center;
@@ -192,8 +216,8 @@
 .vkbd-key {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 38px;
-  padding: 2px 4px;
+  min-height: 28px;
+  padding: 1px 3px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -201,8 +225,8 @@
   background: #2a2a2a;
   color: #d2d2d2;
   border: 1px solid #3a3a3a;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 5px;
+  font-size: 8px;
   line-height: 1.1;
   cursor: pointer;
   transition: background 0.08s, transform 0.05s;
@@ -241,32 +265,41 @@
 }
 
 .vkbd-sub {
-  font-size: 9px;
+  font-size: 6px;
   opacity: 0.6;
-  margin-top: 1px;
+  margin-top: 0;
 }
 
 .vkbd-fab {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: 44px;
-  height: 44px;
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 25;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
-  background: rgba(30, 30, 30, 0.85);
+  background: rgba(40, 40, 40, 0.92);
   color: #e0e0e0;
-  border: 1px solid #3a3a3a;
-  font-size: 20px;
+  border: 1px solid #555;
+  font-size: 22px;
   cursor: pointer;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 
+  &:hover {
+    background: rgba(55, 55, 55, 0.95);
+  }
   &:active {
     background: #444;
+    transform: scale(0.94);
   }
 
   .pos-top & {
     bottom: auto;
-    top: 8px;
+    top: 12px;
   }
 }
 
@@ -524,16 +557,41 @@
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 768px), (pointer: coarse) {
+  .vkbd {
+    padding: 2px;
+    gap: 2px;
+  }
+  .vkbd-row {
+    gap: 2px;
+  }
   .vkbd-key {
-    min-height: 34px;
-    font-size: 12px;
+    min-height: 28px;
+    font-size: 9px;
+    border-radius: 5px;
   }
   .vkbd-sub {
-    display: none;
+    font-size: 6px;
+  }
+  .vkbd-input {
+    font-size: 16px;
+    padding: 3px 7px;
+  }
+  .vkbd-send-btn {
+    min-width: 32px;
+    font-size: 11px;
+  }
+  .vkbd-icon-btn {
+    width: 24px;
+    height: 22px;
+    font-size: 9px;
   }
   .vkbd-settings {
-    padding: 10px;
-    font-size: 12px;
+    padding: 8px;
+    font-size: 9px;
+  }
+  .vkbd-mods-badge {
+    font-size: 9px;
+    padding: 1px 5px;
   }
 }

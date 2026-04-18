@@ -50,9 +50,13 @@ const NAMED_CSI: Record<NamedKey, { csi?: string; ss3?: string; raw?: string; ti
 export function bytesForNamed(key: NamedKey, mods: ModState): string {
     const def = NAMED_CSI[key];
     const b = modBits(mods);
-    if (def.raw && b === 0) return def.raw;
-    if (def.raw && key === 'tab' && mods.shift) return '\x1b[Z';
-    if (def.raw) return def.raw;
+    if (def.raw) {
+        if (key === 'tab' && mods.shift) return '\x1b[Z';
+        let base = def.raw;
+        if (key === 'enter' && mods.ctrl) base = '\n';
+        if (key === 'backspace' && mods.ctrl) base = '\b';
+        return mods.alt ? '\x1b' + base : base;
+    }
     if (def.tilde !== undefined) {
         return b ? `\x1b[${def.tilde};${b + 1}~` : `\x1b[${def.tilde}~`;
     }

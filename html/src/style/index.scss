@@ -10,6 +10,16 @@ body {
 
 .app-root {
   height: 100%;
+  display: block;
+}
+
+body.vkbd-docked-bottom #terminal-container {
+  height: calc(100% - var(--vkbd-dock-height, 0px));
+}
+
+body.vkbd-docked-top #terminal-container {
+  height: calc(100% - var(--vkbd-dock-height, 0px));
+  margin-top: var(--vkbd-dock-height, 0px);
 }
 
 #terminal-container {

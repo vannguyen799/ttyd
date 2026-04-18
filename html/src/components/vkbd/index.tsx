@@ -1,7 +1,7 @@
 import { h, Component, JSX } from 'preact';
 import { ROWS } from './keys';
-import { dispatch, emptyMods, ModState } from './actions';
-import { loadSettings, saveSettings, resetLayout, keyId, Settings } from './storage';
+import { bytesForText, dispatch, emptyMods, ModState } from './actions';
+import { loadSettings, saveSettings, resetLayout, keyId, loadInputDraft, saveInputDraft, Settings } from './storage';
 import { SettingsPanel } from './settings';
 import type { KeyDef, ModKey } from './types';
 
@@ -10,7 +10,6 @@ interface State {
     locked: { [K in ModKey]: boolean };
     settings: Settings;
     settingsOpen: boolean;
-    inputText: string;
 }
 
 const MIN_WIDTH = 260;
@@ -60,19 +59,80 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             locked: { ctrl: false, shift: false, alt: false, meta: false },
             settings: loadSettings(),
             settingsOpen: false,
-            inputText: '',
         };
     }
+
+    private resizeObs?: ResizeObserver;
 
     componentDidMount() {
         window.addEventListener('resize', this.clampPosition);
         this.tryRegisterHook();
+        this.syncDockedLayout();
+        this.applyTermFontSize();
+        if (typeof ResizeObserver !== 'undefined' && this.hostEl) {
+            this.resizeObs = new ResizeObserver(() => this.syncDockedLayout());
+            this.resizeObs.observe(this.hostEl);
+        }
     }
+
+    componentDidUpdate() {
+        this.syncDockedLayout();
+        this.applyTermFontSize();
+    }
+
+    private applyTermFontSize = () => {
+        const fs = this.state.settings.termFontSize;
+        if (!fs) return;
+        const tryApply = () => {
+            const term = (window as unknown as { term?: { options?: { fontSize?: number }; fit?: () => void } }).term;
+            if (!term || !term.options) {
+                window.setTimeout(tryApply, 100);
+                return;
+            }
+            if (term.options.fontSize === fs) return;
+            term.options.fontSize = fs;
+            try {
+                term.fit?.();
+            } catch {
+                // ignore
+            }
+        };
+        tryApply();
+    };
 
     componentWillUnmount() {
         window.removeEventListener('resize', this.clampPosition);
         if (window.ttyd) window.ttyd.vkbdHook = undefined;
+        this.resizeObs?.disconnect();
+        document.body.classList.remove('vkbd-docked-bottom', 'vkbd-docked-top');
+        document.documentElement.style.removeProperty('--vkbd-dock-height');
     }
+
+    private syncDockedLayout = () => {
+        const { settings } = this.state;
+        const docked = !settings.pos && settings.visible;
+        const dockBottom = docked && settings.position !== 'top';
+        const dockTop = docked && settings.position === 'top';
+        document.body.classList.toggle('vkbd-docked-bottom', dockBottom);
+        document.body.classList.toggle('vkbd-docked-top', dockTop);
+        if (docked && this.hostEl) {
+            const h = this.hostEl.getBoundingClientRect().height;
+            document.documentElement.style.setProperty('--vkbd-dock-height', h + 'px');
+        } else {
+            document.documentElement.style.removeProperty('--vkbd-dock-height');
+        }
+        // Retrigger xterm fit so row/col recompute to new container size.
+        const fit = (window as unknown as { term?: { fit?: () => void } }).term?.fit;
+        if (fit) {
+            requestAnimationFrame(() => {
+                try {
+                    fit();
+                } catch {
+                    // ignore
+                }
+            });
+        }
+    };
 
     private tryRegisterHook = () => {
         if (window.ttyd) {
@@ -152,9 +212,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         this.persist(s);
     };
 
-    private onInputChange = (e: Event) => {
-        this.setState({ inputText: (e.target as HTMLInputElement).value });
-    };
+    private inputEl: HTMLTextAreaElement | null = null;
 
     private onInputKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -163,11 +221,56 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         }
     };
 
+    private onInputBeforeInput = (e: InputEvent) => {
+        if (e.inputType !== 'insertText' && e.inputType !== 'insertCompositionText') return;
+        const mods = this.state.mods;
+        const any = mods.ctrl || mods.shift || mods.alt || mods.meta;
+        if (!any) return;
+        const data = e.data;
+        if (!data) return;
+        e.preventDefault();
+        let bytes = '';
+        for (const ch of data) {
+            bytes += bytesForText(ch, mods);
+        }
+        window.ttyd?.sendBytes(bytes);
+        this.clearMods();
+        if (this.inputEl) {
+            this.inputEl.value = '';
+            this.inputEl.style.height = '';
+        }
+        saveInputDraft('');
+    };
+
     private sendInput = (withNewline: boolean) => {
-        const text = this.state.inputText;
+        const el = this.inputEl;
+        if (!el) return;
+        const text = el.value;
         const bytes = withNewline ? text + '\r' : text;
         if (bytes) window.ttyd?.sendBytes(bytes);
-        this.setState({ inputText: '' });
+        el.value = '';
+        el.style.height = '';
+        saveInputDraft('');
+    };
+
+    private onInputAutoGrow = (e: Event) => {
+        const ta = e.target as HTMLTextAreaElement;
+        ta.style.height = 'auto';
+        const cs = window.getComputedStyle(ta);
+        const maxH = parseFloat(cs.maxHeight) || Infinity;
+        ta.style.height = Math.min(ta.scrollHeight, maxH) + 'px';
+        saveInputDraft(ta.value);
+    };
+
+    private restoreInputDraft = (el: HTMLTextAreaElement | null) => {
+        this.inputEl = el;
+        if (!el) return;
+        const draft = loadInputDraft();
+        if (draft && !el.value) {
+            el.value = draft;
+            // trigger auto-grow
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
     };
 
     private onKeyClick = (k: KeyDef) => {
@@ -371,6 +474,30 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         this.persist(resetLayout(this.state.settings));
     };
 
+    private onFitScreen = () => {
+        this.persist({
+            ...this.state.settings,
+            pos: null,
+            width: null,
+            keyHeight: null,
+        });
+    };
+
+    private renderModsIndicator() {
+        const { mods, locked } = this.state;
+        const active: string[] = [];
+        if (mods.ctrl) active.push(locked.ctrl ? '⎈*' : '⎈');
+        if (mods.shift) active.push(locked.shift ? '⇧*' : '⇧');
+        if (mods.alt) active.push(locked.alt ? '⌥*' : '⌥');
+        if (mods.meta) active.push(locked.meta ? '◆*' : '◆');
+        if (active.length === 0) return null;
+        return (
+            <div class="vkbd-mods-badge" title="Active modifiers (tap a key to combine)">
+                {active.join('+')}
+            </div>
+        );
+    }
+
     private isActive(k: KeyDef): boolean {
         if (k.action.type !== 'mod') return false;
         return this.state.mods[k.action.mod];
@@ -433,6 +560,15 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                             <button class="vkbd-icon-btn" onClick={this.openSettings} aria-label="Settings">
                                 ⚙
                             </button>
+                            <button
+                                class="vkbd-icon-btn"
+                                onClick={this.onFitScreen}
+                                title="Fit to screen (dock, reset size)"
+                                aria-label="Fit screen"
+                            >
+                                ⇲
+                            </button>
+                            {this.renderModsIndicator()}
                             <div
                                 class="vkbd-drag"
                                 title="Drag to move · double-click to dock"
@@ -450,17 +586,18 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                         </div>
                         {settings.showInput ? (
                             <div class="vkbd-input-row">
-                                <input
-                                    type="text"
+                                <textarea
                                     class="vkbd-input"
-                                    value={this.state.inputText}
-                                    placeholder="Type, then Enter to send…"
+                                    ref={this.restoreInputDraft}
+                                    placeholder="Type here — Enter to send, Shift+Enter for newline"
                                     autocomplete="off"
                                     autocapitalize="off"
                                     autocorrect="off"
                                     spellcheck={false}
-                                    onInput={this.onInputChange}
+                                    rows={1}
+                                    onInput={this.onInputAutoGrow}
                                     onKeyDown={this.onInputKeyDown}
+                                    onBeforeInput={this.onInputBeforeInput}
                                 />
                                 <button
                                     class="vkbd-send-btn"

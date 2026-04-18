@@ -186,6 +186,23 @@ export class Xterm {
         terminal.open(parent);
         fitAddon.fit();
 
+        // On touch devices, prevent the xterm helper textarea from triggering
+        // the on-screen keyboard. Input should go through the vkbd compose
+        // buffer instead, which avoids the char-drop issue xterm has with IME
+        // composition events. Physical keyboards still work normally.
+        try {
+            const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+            if (coarse) {
+                const ta = terminal.element?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
+                if (ta) {
+                    ta.inputMode = 'none';
+                    ta.setAttribute('inputmode', 'none');
+                }
+            }
+        } catch {
+            // ignore
+        }
+
         terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
             if (event.type !== 'keydown') return true;
             const hook = window.ttyd?.vkbdHook;
