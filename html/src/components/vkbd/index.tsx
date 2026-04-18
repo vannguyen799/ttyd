@@ -10,6 +10,7 @@ interface State {
     locked: { [K in ModKey]: boolean };
     settings: Settings;
     settingsOpen: boolean;
+    inputText: string;
 }
 
 const MIN_WIDTH = 260;
@@ -59,6 +60,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             locked: { ctrl: false, shift: false, alt: false, meta: false },
             settings: loadSettings(),
             settingsOpen: false,
+            inputText: '',
         };
     }
 
@@ -148,6 +150,24 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
 
     private onSettingsChange = (s: Settings) => {
         this.persist(s);
+    };
+
+    private onInputChange = (e: Event) => {
+        this.setState({ inputText: (e.target as HTMLInputElement).value });
+    };
+
+    private onInputKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            this.sendInput(true);
+        }
+    };
+
+    private sendInput = (withNewline: boolean) => {
+        const text = this.state.inputText;
+        const bytes = withNewline ? text + '\r' : text;
+        if (bytes) window.ttyd?.sendBytes(bytes);
+        this.setState({ inputText: '' });
     };
 
     private onKeyClick = (k: KeyDef) => {
@@ -428,6 +448,36 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                 ✕
                             </button>
                         </div>
+                        {settings.showInput ? (
+                            <div class="vkbd-input-row">
+                                <input
+                                    type="text"
+                                    class="vkbd-input"
+                                    value={this.state.inputText}
+                                    placeholder="Type, then Enter to send…"
+                                    autocomplete="off"
+                                    autocapitalize="off"
+                                    autocorrect="off"
+                                    spellcheck={false}
+                                    onInput={this.onInputChange}
+                                    onKeyDown={this.onInputKeyDown}
+                                />
+                                <button
+                                    class="vkbd-send-btn"
+                                    onClick={() => this.sendInput(false)}
+                                    title="Send text only (no Enter)"
+                                >
+                                    →
+                                </button>
+                                <button
+                                    class="vkbd-send-btn primary"
+                                    onClick={() => this.sendInput(true)}
+                                    title="Send text + Enter"
+                                >
+                                    ↵
+                                </button>
+                            </div>
+                        ) : null}
                         {this.buildRows().map((row, ri) => (
                             <div class="vkbd-row" key={ri}>
                                 {row.map(({ id, def }) => {

@@ -10,8 +10,9 @@ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const path = window.location.pathname.replace(/[/]+$/, '');
 const wsUrl = [protocol, '//', window.location.host, path, '/ws', window.location.search].join('');
 const tokenUrl = [window.location.protocol, '//', window.location.host, path, '/token'].join('');
+const isMobile = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
 const clientOptions = {
-    rendererType: 'webgl',
+    rendererType: isMobile ? 'dom' : 'webgl',
     disableLeaveAlert: false,
     disableResizeOverlay: false,
     enableZmodem: false,

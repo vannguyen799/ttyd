@@ -42,6 +42,62 @@
   box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.4);
 }
 
+.vkbd-input-row {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+  padding: 2px 0;
+}
+
+.vkbd-input {
+  flex: 1 1 0;
+  min-width: 0;
+  background: #111;
+  color: #e0e0e0;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  -webkit-appearance: none;
+
+  &:focus {
+    border-color: #5a8dd6;
+    box-shadow: 0 0 0 1px rgba(90, 141, 214, 0.4);
+  }
+  &::placeholder {
+    color: #666;
+  }
+}
+
+.vkbd-send-btn {
+  min-width: 42px;
+  padding: 0 10px;
+  background: #2a2a2a;
+  color: #d2d2d2;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:active {
+    background: #3d3d3d;
+    transform: scale(0.96);
+  }
+
+  &.primary {
+    background: #3467c4;
+    border-color: #4277d4;
+    color: #fff;
+
+    &:active {
+      background: #2855aa;
+    }
+  }
+}
+
 .vkbd-resize-corner {
   position: absolute;
   right: 0;

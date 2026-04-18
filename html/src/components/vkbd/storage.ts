@@ -15,6 +15,7 @@ export interface Settings {
     autoRepeat: boolean;
     repeatDelayMs: number;
     repeatIntervalMs: number;
+    showInput: boolean;
 }
 
 function defaultVisible(): boolean {
@@ -47,6 +48,7 @@ const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width'> = {
     autoRepeat: true,
     repeatDelayMs: 350,
     repeatIntervalMs: 60,
+    showInput: true,
 };
 
 export function keyId(rowIndex: number, keyIndex: number, def: KeyDef): string {

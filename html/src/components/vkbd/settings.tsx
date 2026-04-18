@@ -198,6 +198,15 @@ export class SettingsPanel extends Component<Props, FormState> {
                                 : 'docked'}
                         </span>
                     </div>
+                    <div class="vkbd-row-setting">
+                        <label>Input field</label>
+                        <input
+                            type="checkbox"
+                            checked={settings.showInput}
+                            onChange={e => this.update({ showInput: (e.target as HTMLInputElement).checked })}
+                        />
+                        <span class="vkbd-hint">compose buffer + Send button</span>
+                    </div>
                 </div>
 
                 <div class="vkbd-section">
