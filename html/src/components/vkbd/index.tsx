@@ -18,6 +18,14 @@ const MAX_KEY_H = 72;
 const LONG_PRESS_MS = 450;
 const MOVE_CANCEL_PX = 10;
 
+function isCoarse(): boolean {
+    try {
+        return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    } catch {
+        return false;
+    }
+}
+
 export class VirtualKeyboard extends Component<Record<string, never>, State> {
     private hostEl: HTMLDivElement | null = null;
     private dragState: {
@@ -297,9 +305,14 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             hideKeyboard: this.hide,
         });
         if (shouldClear) this.clearMods();
+        // Only auto-focus xterm on desktop. On mobile (coarse pointer),
+        // focusing would pop up the Android on-screen keyboard whenever the
+        // user taps a vkbd button, which they rarely want — they came to the
+        // vkbd precisely to avoid the OS keyboard. If they do want to type
+        // on the terminal directly, they can tap the terminal themselves.
         const t = action.type;
         const needsFocus = t === 'send' || t === 'text' || t === 'named' || t === 'paste';
-        if (needsFocus) window.ttyd?.focus();
+        if (needsFocus && !isCoarse()) window.ttyd?.focus();
     };
 
     private resolveAction(a: KeyDef['action']): KeyDef['action'] {
