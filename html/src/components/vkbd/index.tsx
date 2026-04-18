@@ -121,16 +121,23 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         } else {
             document.documentElement.style.removeProperty('--vkbd-dock-height');
         }
-        // Retrigger xterm fit so row/col recompute to new container size.
-        const fit = (window as unknown as { term?: { fit?: () => void } }).term?.fit;
-        if (fit) {
+        this.tryFit();
+    };
+
+    private tryFit = (attempts = 0) => {
+        const term = (window as unknown as { term?: { fit?: () => void } }).term;
+        if (term && term.fit) {
             requestAnimationFrame(() => {
                 try {
-                    fit();
+                    term.fit!();
                 } catch {
                     // ignore
                 }
             });
+            return;
+        }
+        if (attempts < 50) {
+            window.setTimeout(() => this.tryFit(attempts + 1), 100);
         }
     };
 

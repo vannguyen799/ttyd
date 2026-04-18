@@ -10,7 +10,8 @@ import { ImageAddon } from '@xterm/addon-image';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { OverlayAddon } from './addons/overlay';
 import { ZmodemAddon } from './addons/zmodem';
-import { bytesForKeyEvent } from '../../vkbd/actions';
+import { bytesForKeyEvent, bytesForText } from '../../vkbd/actions';
+import { loadSettings as loadVkbdSettings } from '../../vkbd/storage';
 
 import '@xterm/xterm/css/xterm.css';
 
@@ -186,18 +187,28 @@ export class Xterm {
         terminal.open(parent);
         fitAddon.fit();
 
-        // On touch devices, prevent the xterm helper textarea from triggering
-        // the on-screen keyboard. Input should go through the vkbd compose
-        // buffer instead, which avoids the char-drop issue xterm has with IME
-        // composition events. Physical keyboards still work normally.
+        // Intercept beforeinput on the xterm helper textarea so virtual
+        // modifiers (tapped on the vkbd) apply to Android/IME keystrokes
+        // typed directly on the terminal. Without this, composition events
+        // from on-screen keyboards would bypass attachCustomKeyEventHandler
+        // (which only sees keydown).
         try {
-            const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-            if (coarse) {
-                const ta = terminal.element?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
-                if (ta) {
-                    ta.inputMode = 'none';
-                    ta.setAttribute('inputmode', 'none');
-                }
+            const ta = terminal.element?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
+            if (ta) {
+                ta.addEventListener('beforeinput', (event: InputEvent) => {
+                    if (event.inputType !== 'insertText' && event.inputType !== 'insertCompositionText') return;
+                    const hook = window.ttyd?.vkbdHook;
+                    if (!hook) return;
+                    const vm = hook.getMods();
+                    if (!vm.ctrl && !vm.shift && !vm.alt && !vm.meta) return;
+                    const data = event.data;
+                    if (!data) return;
+                    event.preventDefault();
+                    let bytes = '';
+                    for (const ch of data) bytes += bytesForText(ch, vm);
+                    this.sendData(bytes);
+                    hook.consume();
+                });
             }
         } catch {
             // ignore
@@ -569,6 +580,13 @@ export class Xterm {
                     }
                     break;
                 default:
+                    if (key === 'fontSize') {
+                        const vkbd = loadVkbdSettings();
+                        if (vkbd.termFontSize) {
+                            console.log(`[ttyd] skipping server fontSize=${value}, user override=${vkbd.termFontSize}`);
+                            break;
+                        }
+                    }
                     console.log(`[ttyd] option: ${key}=${JSON.stringify(value)}`);
                     if (terminal.options[key] instanceof Object) {
                         terminal.options[key] = Object.assign({}, terminal.options[key], value);

@@ -2,6 +2,7 @@ import { h, Component } from 'preact';
 
 import { Terminal } from './terminal';
 import { VirtualKeyboard } from './vkbd';
+import { loadSettings } from './vkbd/storage';
 
 import type { ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { ClientOptions, FlowControl } from './terminal/xterm';
@@ -11,6 +12,7 @@ const path = window.location.pathname.replace(/[/]+$/, '');
 const wsUrl = [protocol, '//', window.location.host, path, '/ws', window.location.search].join('');
 const tokenUrl = [window.location.protocol, '//', window.location.host, path, '/token'].join('');
 const isMobile = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+const savedVkbd = loadSettings();
 const clientOptions = {
     rendererType: isMobile ? 'dom' : 'webgl',
     disableLeaveAlert: false,
@@ -23,7 +25,7 @@ const clientOptions = {
     unicodeVersion: '11',
 } as ClientOptions;
 const termOptions = {
-    fontSize: isMobile ? 9 : 8,
+    fontSize: savedVkbd.termFontSize || (isMobile ? 9 : 8),
     fontFamily: 'Consolas,Liberation Mono,Menlo,Courier,monospace',
     theme: {
         foreground: '#d2d2d2',
