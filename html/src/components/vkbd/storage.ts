@@ -114,13 +114,35 @@ export function genId(): string {
     return `c:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function sessionKey(prefix: string): string {
+function sanitizeName(s: string): string {
+    return s.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
+}
+
+function ttydSessionName(): string {
     try {
-        const loc = window.location;
-        return `${prefix}:${loc.host}${loc.pathname}`;
+        const args = new URLSearchParams(window.location.search).getAll('arg');
+        let i = 0;
+        while (i < args.length) {
+            const a = args[i];
+            if (a.startsWith('cwd:') || a === 'claude' || a.startsWith('claude:')) {
+                i++;
+            } else {
+                break;
+            }
+        }
+        const rest = args.slice(i);
+        if (rest.length === 0) return 'main';
+        if (rest[0] === 'screen' || rest[0] === 'tmux') {
+            return sanitizeName(rest[1] ?? '') || 'main';
+        }
+        return sanitizeName(rest[0]) || 'main';
     } catch {
-        return prefix;
+        return 'main';
     }
+}
+
+function sessionKey(prefix: string): string {
+    return `${prefix}:${ttydSessionName()}`;
 }
 
 function inputKey(): string {
