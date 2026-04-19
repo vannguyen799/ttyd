@@ -114,12 +114,41 @@ export function genId(): string {
     return `c:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function inputKey(): string {
+function sessionKey(prefix: string): string {
     try {
         const loc = window.location;
-        return `ttyd.vkbd.input.v1:${loc.host}${loc.pathname}`;
+        return `${prefix}:${loc.host}${loc.pathname}`;
     } catch {
-        return 'ttyd.vkbd.input.v1';
+        return prefix;
+    }
+}
+
+function inputKey(): string {
+    return sessionKey('ttyd.vkbd.input.v1');
+}
+
+const MAX_HISTORY = 10;
+
+export function loadInputHistory(): string[] {
+    try {
+        const raw = localStorage.getItem(sessionKey('ttyd.vkbd.hist.v1'));
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+}
+
+export function pushInputHistory(text: string): void {
+    if (!text.trim()) return;
+    try {
+        const k = sessionKey('ttyd.vkbd.hist.v1');
+        const hist = loadInputHistory().filter(s => s !== text);
+        hist.unshift(text);
+        localStorage.setItem(k, JSON.stringify(hist.slice(0, MAX_HISTORY)));
+    } catch {
+        // ignore
     }
 }
 

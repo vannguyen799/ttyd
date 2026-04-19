@@ -1,7 +1,7 @@
 import { h, Component, JSX } from 'preact';
 import { ROWS } from './keys';
 import { bytesForText, dispatch, emptyMods, ModState } from './actions';
-import { loadSettings, saveSettings, resetLayout, keyId, loadInputDraft, saveInputDraft, Settings } from './storage';
+import { loadSettings, saveSettings, resetLayout, keyId, loadInputDraft, saveInputDraft, loadInputHistory, pushInputHistory, Settings } from './storage';
 import { SettingsPanel } from './settings';
 import type { KeyDef, ModKey } from './types';
 
@@ -10,6 +10,7 @@ interface State {
     locked: { [K in ModKey]: boolean };
     settings: Settings;
     settingsOpen: boolean;
+    historyOpen: boolean;
 }
 
 const MIN_WIDTH = 260;
@@ -67,6 +68,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             locked: { ctrl: false, shift: false, alt: false, meta: false },
             settings: loadSettings(),
             settingsOpen: false,
+            historyOpen: false,
         };
     }
 
@@ -74,6 +76,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
 
     componentDidMount() {
         window.addEventListener('resize', this.clampPosition);
+        window.addEventListener('pointerdown', this.onDocPointerDown);
         this.tryRegisterHook();
         this.syncDockedLayout();
         this.applyTermFontSize();
@@ -110,6 +113,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
 
     componentWillUnmount() {
         window.removeEventListener('resize', this.clampPosition);
+        window.removeEventListener('pointerdown', this.onDocPointerDown);
         if (window.ttyd) window.ttyd.vkbdHook = undefined;
         this.resizeObs?.disconnect();
         document.body.classList.remove('vkbd-docked-bottom', 'vkbd-docked-top');
@@ -263,9 +267,31 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         const text = el.value;
         const bytes = withNewline ? text + '\r' : text;
         if (bytes) window.ttyd?.sendBytes(bytes);
+        if (text.trim()) pushInputHistory(text);
         el.value = '';
         el.style.height = '';
         saveInputDraft('');
+        this.setState({ historyOpen: false });
+    };
+
+    private onDocPointerDown = () => {
+        if (this.state.historyOpen) this.setState({ historyOpen: false });
+    };
+
+    private toggleHistory = (e: MouseEvent) => {
+        e.stopPropagation();
+        this.setState(s => ({ historyOpen: !s.historyOpen }));
+    };
+
+    private pickHistory = (text: string) => {
+        const el = this.inputEl;
+        if (el) {
+            el.value = text;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.focus();
+        }
+        saveInputDraft(text);
+        this.setState({ historyOpen: false });
     };
 
     private onInputAutoGrow = (e: Event) => {
@@ -547,7 +573,8 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
     }
 
     render() {
-        const { settings, settingsOpen } = this.state;
+        const { settings, settingsOpen, historyOpen } = this.state;
+        const history = historyOpen ? loadInputHistory() : [];
         const free = !!settings.pos;
         const hostClass = [
             'vkbd-host',
@@ -606,6 +633,20 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                         </div>
                         {settings.showInput ? (
                             <div class="vkbd-input-row">
+                                {historyOpen && history.length > 0 ? (
+                                    <div class="vkbd-history-dropdown" onClick={e => e.stopPropagation()}>
+                                        {history.map((item, i) => (
+                                            <button
+                                                key={i}
+                                                class="vkbd-history-item"
+                                                onClick={() => this.pickHistory(item)}
+                                                title={item}
+                                            >
+                                                {item.length > 60 ? item.slice(0, 60) + '…' : item}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : null}
                                 <textarea
                                     class="vkbd-input"
                                     ref={this.restoreInputDraft}
@@ -619,6 +660,14 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                     onKeyDown={this.onInputKeyDown}
                                     onBeforeInput={this.onInputBeforeInput}
                                 />
+                                <button
+                                    class={`vkbd-send-btn${historyOpen ? ' active' : ''}`}
+                                    onClick={this.toggleHistory}
+                                    title="Input history"
+                                    onMouseDown={e => e.preventDefault()}
+                                >
+                                    ▾
+                                </button>
                                 <button
                                     class="vkbd-send-btn"
                                     onClick={() => this.sendInput(false)}

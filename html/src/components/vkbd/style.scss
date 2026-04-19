@@ -43,10 +43,47 @@
 }
 
 .vkbd-input-row {
+  position: relative;
   display: flex;
   gap: 4px;
   align-items: stretch;
   padding: 2px 0;
+}
+
+.vkbd-history-dropdown {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.vkbd-history-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  background: transparent;
+  color: #d0d0d0;
+  border: none;
+  border-bottom: 1px solid #2a2a2a;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:last-child { border-bottom: none; }
+  &:hover { background: #2a3a4a; color: #fff; }
+  &:active { background: #334d66; }
 }
 
 .vkbd-input {
