@@ -114,11 +114,18 @@ export function genId(): string {
     return `c:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const INPUT_KEY = 'ttyd.vkbd.input.v1';
+function inputKey(): string {
+    try {
+        const loc = window.location;
+        return `ttyd.vkbd.input.v1:${loc.host}${loc.pathname}`;
+    } catch {
+        return 'ttyd.vkbd.input.v1';
+    }
+}
 
 export function loadInputDraft(): string {
     try {
-        return sessionStorage.getItem(INPUT_KEY) || '';
+        return localStorage.getItem(inputKey()) || '';
     } catch {
         return '';
     }
@@ -126,9 +133,9 @@ export function loadInputDraft(): string {
 
 export function saveInputDraft(text: string): void {
     try {
-        if (text) sessionStorage.setItem(INPUT_KEY, text);
-        else sessionStorage.removeItem(INPUT_KEY);
-        localStorage.removeItem(INPUT_KEY);
+        const k = inputKey();
+        if (text) localStorage.setItem(k, text);
+        else localStorage.removeItem(k);
     } catch {
         // ignore
     }
