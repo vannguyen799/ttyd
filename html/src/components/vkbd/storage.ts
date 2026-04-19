@@ -118,7 +118,7 @@ const INPUT_KEY = 'ttyd.vkbd.input.v1';
 
 export function loadInputDraft(): string {
     try {
-        return localStorage.getItem(INPUT_KEY) || '';
+        return sessionStorage.getItem(INPUT_KEY) || '';
     } catch {
         return '';
     }
@@ -126,8 +126,9 @@ export function loadInputDraft(): string {
 
 export function saveInputDraft(text: string): void {
     try {
-        if (text) localStorage.setItem(INPUT_KEY, text);
-        else localStorage.removeItem(INPUT_KEY);
+        if (text) sessionStorage.setItem(INPUT_KEY, text);
+        else sessionStorage.removeItem(INPUT_KEY);
+        localStorage.removeItem(INPUT_KEY);
     } catch {
         // ignore
     }
