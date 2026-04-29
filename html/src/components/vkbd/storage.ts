@@ -124,7 +124,13 @@ function ttydSessionName(): string {
         let i = 0;
         while (i < args.length) {
             const a = args[i];
-            if (a.startsWith('cwd:') || a === 'claude' || a.startsWith('claude:')) {
+            if (
+                a.startsWith('cwd:') ||
+                a === 'codex' ||
+                a.startsWith('codex:') ||
+                a === 'claude' ||
+                a.startsWith('claude:')
+            ) {
                 i++;
             } else {
                 break;
