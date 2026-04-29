@@ -634,12 +634,17 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                         {settings.showInput ? (
                             <div class="vkbd-input-row">
                                 {historyOpen && history.length > 0 ? (
-                                    <div class="vkbd-history-dropdown" onClick={e => e.stopPropagation()}>
+                                    <div
+                                        class="vkbd-history-dropdown"
+                                        onClick={e => e.stopPropagation()}
+                                        onPointerDown={e => e.stopPropagation()}
+                                    >
                                         {history.map((item, i) => (
                                             <button
                                                 key={i}
                                                 class="vkbd-history-item"
                                                 onClick={() => this.pickHistory(item)}
+                                                onMouseDown={e => e.preventDefault()}
                                                 title={item}
                                             >
                                                 {item.length > 60 ? item.slice(0, 60) + '…' : item}
@@ -665,6 +670,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                     onClick={this.toggleHistory}
                                     title="Input history"
                                     onMouseDown={e => e.preventDefault()}
+                                    onPointerDown={e => e.stopPropagation()}
                                 >
                                     ▾
                                 </button>
