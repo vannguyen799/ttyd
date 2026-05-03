@@ -122,13 +122,43 @@ export class Xterm {
     private closeOnDisconnect = false;
 
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
+    private fitRaf = 0;
 
     constructor(
         private options: XtermOptions,
         private sendCb: () => void
     ) {}
 
+    // Coalesce fit() calls to one per frame and skip invalid dims. Calling
+    // fitAddon.fit() repeatedly (e.g. on every vkbd keystroke + ResizeObserver
+    // tick) while the parser is mid-write triggers an xterm.js race where
+    // buffer.lines.get(ybase + y) returns undefined inside lineFeed, throwing
+    // "Cannot set properties of undefined (setting 'isWrapped')".
+    @bind
+    private safeFit() {
+        if (this.fitRaf) return;
+        this.fitRaf = requestAnimationFrame(() => {
+            this.fitRaf = 0;
+            const t = this.terminal;
+            if (!t || !t.element || !t.element.parentElement) return;
+            const dims = this.fitAddon.proposeDimensions();
+            if (!dims) return;
+            if (!Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+            if (dims.cols < 2 || dims.rows < 1) return;
+            if (t.cols === dims.cols && t.rows === dims.rows) return;
+            try {
+                this.fitAddon.fit();
+            } catch (e) {
+                console.warn('[ttyd] fit failed', e);
+            }
+        });
+    }
+
     dispose() {
+        if (this.fitRaf) {
+            cancelAnimationFrame(this.fitRaf);
+            this.fitRaf = 0;
+        }
         for (const d of this.disposables) {
             d.dispose();
         }
@@ -175,9 +205,7 @@ export class Xterm {
         this.terminal = new Terminal(this.options.termOptions);
         const { terminal, fitAddon, overlayAddon, clipboardAddon, webLinksAddon } = this;
         window.term = terminal as TtydTerminal;
-        window.term.fit = () => {
-            this.fitAddon.fit();
-        };
+        window.term.fit = () => this.safeFit();
 
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(overlayAddon);
@@ -185,7 +213,7 @@ export class Xterm {
         terminal.loadAddon(webLinksAddon);
 
         terminal.open(parent);
-        fitAddon.fit();
+        this.safeFit();
 
         // Intercept beforeinput on the xterm helper textarea so virtual
         // modifiers (tapped on the vkbd) apply to Android/IME keystrokes
@@ -295,7 +323,7 @@ export class Xterm {
 
     @bind
     private initListeners() {
-        const { terminal, fitAddon, overlayAddon, register, sendData } = this;
+        const { terminal, overlayAddon, register, sendData } = this;
         register(
             terminal.onTitleChange(data => {
                 if (data && data !== '' && !this.titleFixed) {
@@ -323,7 +351,7 @@ export class Xterm {
                 this.overlayAddon?.showOverlay('\u2702', 200);
             })
         );
-        register(addEventListener(window, 'resize', () => fitAddon.fit()));
+        register(addEventListener(window, 'resize', () => this.safeFit()));
         register(addEventListener(window, 'beforeunload', this.onWindowUnload));
     }
 
@@ -493,7 +521,7 @@ export class Xterm {
 
     @bind
     private applyPreferences(prefs: Preferences) {
-        const { terminal, fitAddon, register } = this;
+        const { terminal, register } = this;
         if (prefs.enableZmodem || prefs.enableTrzsz) {
             this.zmodemAddon = new ZmodemAddon({
                 zmodem: prefs.enableZmodem,
@@ -593,7 +621,7 @@ export class Xterm {
                     } else {
                         terminal.options[key] = value;
                     }
-                    if (key.indexOf('font') === 0) fitAddon.fit();
+                    if (key.indexOf('font') === 0) this.safeFit();
                     break;
             }
         }
