@@ -1,7 +1,17 @@
 import { h, Component, JSX } from 'preact';
 import { ROWS } from './keys';
 import { bytesForText, dispatch, emptyMods, ModState } from './actions';
-import { loadSettings, saveSettings, resetLayout, keyId, loadInputDraft, saveInputDraft, loadInputHistory, pushInputHistory, Settings } from './storage';
+import {
+    loadSettings,
+    saveSettings,
+    resetLayout,
+    keyId,
+    loadInputDraft,
+    saveInputDraft,
+    loadInputHistory,
+    pushInputHistory,
+    Settings,
+} from './storage';
 import { SettingsPanel } from './settings';
 import type { KeyDef, ModKey } from './types';
 
