@@ -129,11 +129,16 @@ export class Xterm {
         private sendCb: () => void
     ) {}
 
-    // Coalesce fit() calls to one per frame and skip invalid dims. Calling
-    // fitAddon.fit() repeatedly (e.g. on every vkbd keystroke + ResizeObserver
-    // tick) while the parser is mid-write triggers an xterm.js race where
-    // buffer.lines.get(ybase + y) returns undefined inside lineFeed, throwing
-    // "Cannot set properties of undefined (setting 'isWrapped')".
+    // Coalesce fit() calls to one per frame, skip invalid/no-op dims, and
+    // resize only when the WriteBuffer has drained. terminal.write() is
+    // async — data is queued and processed across multiple ticks. If
+    // fitAddon.fit() resizes between ticks of one batch, the next tick
+    // parses against new geometry with stale buffer.y, so
+    // buffer.lines.get(ybase + y) returns undefined and crashes inside
+    // print() with "Cannot read properties of undefined (reading
+    // 'setCellFromCodepoint')" or inside lineFeed() with "...setting
+    // 'isWrapped'". terminal.write('', cb) fires cb after all currently
+    // queued data is processed, giving us a safe resize window.
     @bind
     private safeFit() {
         if (this.fitRaf) return;
@@ -141,16 +146,19 @@ export class Xterm {
             this.fitRaf = 0;
             const t = this.terminal;
             if (!t || !t.element || !t.element.parentElement) return;
-            const dims = this.fitAddon.proposeDimensions();
-            if (!dims) return;
-            if (!Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
-            if (dims.cols < 2 || dims.rows < 1) return;
-            if (t.cols === dims.cols && t.rows === dims.rows) return;
-            try {
-                this.fitAddon.fit();
-            } catch (e) {
-                console.warn('[ttyd] fit failed', e);
-            }
+            t.write('', () => {
+                if (!this.terminal || !this.terminal.element || !this.terminal.element.parentElement) return;
+                const dims = this.fitAddon.proposeDimensions();
+                if (!dims) return;
+                if (!Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+                if (dims.cols < 2 || dims.rows < 1) return;
+                if (this.terminal.cols === dims.cols && this.terminal.rows === dims.rows) return;
+                try {
+                    this.fitAddon.fit();
+                } catch (e) {
+                    console.warn('[ttyd] fit failed', e);
+                }
+            });
         });
     }
 
