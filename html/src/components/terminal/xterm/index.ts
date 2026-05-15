@@ -434,7 +434,12 @@ export class Xterm {
 
         this.doReconnect = this.reconnect;
         this.initListeners();
-        terminal.focus();
+        // On coarse-pointer devices (mobile), focusing the helper textarea
+        // pops up the OS keyboard. Reconnects happen often on flaky mobile
+        // networks, so don't auto-focus there — the user can tap the
+        // terminal to bring up the keyboard when they actually want it.
+        const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+        if (!coarse) terminal.focus();
     }
 
     @bind

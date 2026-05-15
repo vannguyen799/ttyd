@@ -47,6 +47,7 @@ export interface KeyDef {
     flex?: number;
     class?: string;
     stickyClear?: boolean;
+    repeat?: boolean;
 }
 
 export interface KeyRow {

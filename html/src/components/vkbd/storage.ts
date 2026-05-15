@@ -118,7 +118,7 @@ function sanitizeName(s: string): string {
     return s.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
 }
 
-function ttydSessionName(): string {
+export function ttydSessionName(): string {
     try {
         const args = new URLSearchParams(window.location.search).getAll('arg');
         let i = 0;

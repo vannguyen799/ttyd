@@ -10,6 +10,7 @@ import {
     saveInputDraft,
     loadInputHistory,
     pushInputHistory,
+    ttydSessionName,
     Settings,
 } from './storage';
 import { SettingsPanel } from './settings';
@@ -62,7 +63,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         timer: number;
         fired: boolean;
     } | null = null;
-    private scrollHold: {
+    private repeatHold: {
         pointerId: number;
         target: Element;
         def: KeyDef;
@@ -333,6 +334,14 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
     };
 
     private fireKey = (k: KeyDef) => {
+        const coarse = isCoarse();
+        // Record whether xterm's helper textarea was already focused (i.e.
+        // the OS keyboard was already showing). If yes, leave it alone so
+        // the user can keep typing; if no, we'll defensively blur after the
+        // action so xterm doesn't pop the OS keyboard up from a synthesized
+        // wheel/scroll or reconnect-time focus.
+        const helperWasFocused =
+            coarse && (document.activeElement as Element | null)?.classList?.contains('xterm-helper-textarea');
         const action = this.resolveAction(k.action);
         const shouldClear = dispatch(action, {
             mods: this.state.mods,
@@ -341,14 +350,23 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             hideKeyboard: this.hide,
         });
         if (shouldClear) this.clearMods();
-        // Only auto-focus xterm on desktop. On mobile (coarse pointer),
-        // focusing would pop up the Android on-screen keyboard whenever the
-        // user taps a vkbd button, which they rarely want — they came to the
-        // vkbd precisely to avoid the OS keyboard. If they do want to type
-        // on the terminal directly, they can tap the terminal themselves.
         const t = action.type;
         const needsFocus = t === 'send' || t === 'text' || t === 'named' || t === 'paste';
-        if (needsFocus && !isCoarse()) window.ttyd?.focus();
+        if (!coarse) {
+            if (needsFocus) window.ttyd?.focus();
+            return;
+        }
+        if (helperWasFocused) return;
+        // Mobile: ensure xterm didn't grab focus during the action (xterm
+        // focuses its textarea on wheel events, which the scroll buttons
+        // synthesize). Blur it now and once more on the next frame to
+        // cover async focus calls.
+        const blur = () => {
+            const el = document.activeElement as HTMLElement | null;
+            if (el?.classList?.contains('xterm-helper-textarea')) el.blur();
+        };
+        blur();
+        requestAnimationFrame(blur);
     };
 
     private resolveAction(a: KeyDef['action']): KeyDef['action'] {
@@ -358,8 +376,12 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         return a;
     }
 
-    private onScrollPointerDown = (k: KeyDef, e: PointerEvent) => {
-        if (k.action.type !== 'scroll') return;
+    private isRepeatable(k: KeyDef): boolean {
+        return !!k.repeat || k.action.type === 'scroll';
+    }
+
+    private onRepeatPointerDown = (k: KeyDef, e: PointerEvent) => {
+        if (!this.isRepeatable(k)) return;
         const target = e.currentTarget as Element;
         try {
             target.setPointerCapture(e.pointerId);
@@ -371,7 +393,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         if (!this.state.settings.autoRepeat) return;
         const delay = this.state.settings.repeatDelayMs;
         const interval = this.state.settings.repeatIntervalMs;
-        const hold: NonNullable<typeof this.scrollHold> = {
+        const hold: NonNullable<typeof this.repeatHold> = {
             pointerId: e.pointerId,
             target,
             def: k,
@@ -381,15 +403,15 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         hold.delayTimer = window.setTimeout(() => {
             hold.intervalTimer = window.setInterval(() => this.fireKey(k), interval);
         }, delay);
-        this.scrollHold = hold;
+        this.repeatHold = hold;
     };
 
-    private onScrollPointerUp = (e: PointerEvent) => {
-        const hold = this.scrollHold;
+    private onRepeatPointerUp = (e: PointerEvent) => {
+        const hold = this.repeatHold;
         if (!hold || hold.pointerId !== e.pointerId) return;
         window.clearTimeout(hold.delayTimer);
         window.clearInterval(hold.intervalTimer);
-        this.scrollHold = null;
+        this.repeatHold = null;
         try {
             hold.target.releasePointerCapture(e.pointerId);
         } catch {
@@ -628,40 +650,58 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                             {this.renderModsIndicator()}
                             <div
                                 class="vkbd-drag"
-                                title="Drag to move · double-click to dock"
+                                title={`${ttydSessionName()} · drag to move · double-click to dock`}
                                 onPointerDown={this.onDragPointerDown}
                                 onPointerMove={this.onDragPointerMove}
                                 onPointerUp={this.onDragPointerUp}
                                 onPointerCancel={this.onDragPointerUp}
                                 onDblClick={this.onDragDoubleClick}
                             >
-                                ⋮⋮ drag ⋮⋮
+                                <span class="vkbd-drag-grip" aria-hidden="true">
+                                    {'⋮⋮'}
+                                </span>
+                                <span class="vkbd-session-name">{ttydSessionName()}</span>
+                                <span class="vkbd-drag-grip" aria-hidden="true">
+                                    {'⋮⋮'}
+                                </span>
                             </div>
+                            {settings.showInput ? (
+                                <button
+                                    class={`vkbd-icon-btn${historyOpen ? ' active' : ''}`}
+                                    onClick={this.toggleHistory}
+                                    title="Input history"
+                                    aria-label="Input history"
+                                    onMouseDown={e => e.preventDefault()}
+                                    onPointerDown={e => e.stopPropagation()}
+                                >
+                                    ▾
+                                </button>
+                            ) : null}
                             <button class="vkbd-icon-btn" onClick={this.hide} aria-label="Hide keyboard">
                                 ✕
                             </button>
+                            {historyOpen && history.length > 0 ? (
+                                <div
+                                    class="vkbd-history-dropdown"
+                                    onClick={e => e.stopPropagation()}
+                                    onPointerDown={e => e.stopPropagation()}
+                                >
+                                    {history.map((item, i) => (
+                                        <button
+                                            key={i}
+                                            class="vkbd-history-item"
+                                            onClick={() => this.pickHistory(item)}
+                                            onMouseDown={e => e.preventDefault()}
+                                            title={item}
+                                        >
+                                            {item.length > 60 ? item.slice(0, 60) + '…' : item}
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : null}
                         </div>
                         {settings.showInput ? (
                             <div class="vkbd-input-row">
-                                {historyOpen && history.length > 0 ? (
-                                    <div
-                                        class="vkbd-history-dropdown"
-                                        onClick={e => e.stopPropagation()}
-                                        onPointerDown={e => e.stopPropagation()}
-                                    >
-                                        {history.map((item, i) => (
-                                            <button
-                                                key={i}
-                                                class="vkbd-history-item"
-                                                onClick={() => this.pickHistory(item)}
-                                                onMouseDown={e => e.preventDefault()}
-                                                title={item}
-                                            >
-                                                {item.length > 60 ? item.slice(0, 60) + '…' : item}
-                                            </button>
-                                        ))}
-                                    </div>
-                                ) : null}
                                 <textarea
                                     class="vkbd-input"
                                     ref={this.restoreInputDraft}
@@ -675,15 +715,6 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                     onKeyDown={this.onInputKeyDown}
                                     onBeforeInput={this.onInputBeforeInput}
                                 />
-                                <button
-                                    class={`vkbd-send-btn${historyOpen ? ' active' : ''}`}
-                                    onClick={this.toggleHistory}
-                                    title="Input history"
-                                    onMouseDown={e => e.preventDefault()}
-                                    onPointerDown={e => e.stopPropagation()}
-                                >
-                                    ▾
-                                </button>
                                 <button
                                     class="vkbd-send-btn"
                                     onClick={() => this.sendInput(false)}
@@ -706,7 +737,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                     const active = this.isActive(def);
                                     const locked = this.isLocked(def);
                                     const isMod = def.action.type === 'mod';
-                                    const isScroll = def.action.type === 'scroll';
+                                    const isRepeat = this.isRepeatable(def);
                                     const cls = [
                                         'vkbd-key',
                                         def.class || '',
@@ -719,13 +750,13 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                     if (def.flex) style.flex = def.flex;
                                     const onPointerDown = isMod
                                         ? (e: PointerEvent) => this.onModPointerDown(def, e)
-                                        : isScroll
-                                        ? (e: PointerEvent) => this.onScrollPointerDown(def, e)
+                                        : isRepeat
+                                        ? (e: PointerEvent) => this.onRepeatPointerDown(def, e)
                                         : undefined;
                                     const onPointerUp = isMod
                                         ? this.onModPointerUp
-                                        : isScroll
-                                        ? this.onScrollPointerUp
+                                        : isRepeat
+                                        ? this.onRepeatPointerUp
                                         : undefined;
                                     return (
                                         <button
