@@ -121,6 +121,11 @@ function sanitizeName(s: string): string {
 export function ttydSessionName(): string {
     try {
         const args = new URLSearchParams(window.location.search).getAll('arg');
+        // Explicit `name:` modifier wins, mirroring ttyd-session.sh.
+        const named = args.find(a => a.startsWith('name:'));
+        if (named !== undefined) {
+            return sanitizeName(named.slice('name:'.length)) || 'main';
+        }
         let i = 0;
         while (i < args.length) {
             const a = args[i];
