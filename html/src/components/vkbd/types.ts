@@ -33,6 +33,11 @@ export type ScrollUnit = 'line' | 'page' | 'bottom' | 'top';
 export type KeyAction =
     | { type: 'mod'; mod: ModKey }
     | { type: 'send'; bytes: string }
+    // Multi-step send: each step's `delay` (ms) elapses before it is sent,
+    // relative to the previous step. Needed for tmux mode switches (e.g.
+    // prefix `:` opens the command prompt, which can't receive its payload
+    // in the same write — tmux must process the mode change first).
+    | { type: 'seq'; steps: { bytes: string; delay?: number }[] }
     | { type: 'text'; text: string }
     | { type: 'named'; key: NamedKey }
     | { type: 'scroll'; by: ScrollUnit; dir?: -1 | 1; amount?: number }

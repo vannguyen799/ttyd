@@ -116,9 +116,15 @@ export const ROWS: KeyRow[] = [
                 class: 'tmux',
             },
             {
+                // prefix `:` opens tmux's command prompt; the command must
+                // arrive in a *separate* write or tmux types it into the
+                // shell instead (mode switch needs an event-loop tick).
                 label: '✕ Pane',
                 sub: 'kill',
-                action: { type: 'send', bytes: TMUX + ':kill-pane\r' },
+                action: {
+                    type: 'seq',
+                    steps: [{ bytes: TMUX + ':' }, { bytes: 'kill-pane\r', delay: 80 }],
+                },
                 class: 'tmux danger',
             },
             {

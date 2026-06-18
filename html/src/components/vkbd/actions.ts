@@ -138,6 +138,15 @@ export function dispatch(action: KeyAction, d: Dispatcher): boolean {
         case 'send':
             bridge.sendBytes(action.bytes);
             return true;
+        case 'seq': {
+            let at = 0;
+            for (const step of action.steps) {
+                at += step.delay ?? 0;
+                if (at <= 0) bridge.sendBytes(step.bytes);
+                else window.setTimeout(() => bridge.sendBytes(step.bytes), at);
+            }
+            return true;
+        }
         case 'text':
             bridge.sendBytes(bytesForText(action.text, d.mods));
             return true;
