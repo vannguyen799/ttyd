@@ -146,6 +146,7 @@ export const GROUPS: KeyGroup[] = [
                         action: cmd('claude --dangerously-skip-permissions'),
                         class: 'cmd',
                     },
+                    { label: 'continue', sub: 'keep going', action: cmd('continue'), class: 'cmd' },
                     { label: '/clear', sub: 'reset', action: cmd('/clear'), class: 'cmd' },
                     { label: 'opus', sub: '/model', action: cmd('/model opus'), class: 'cmd' },
                     { label: 'sonnet', sub: '/model', action: cmd('/model sonnet'), class: 'cmd' },
