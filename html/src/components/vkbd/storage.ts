@@ -152,6 +152,35 @@ export function ttydSessionName(): string {
     }
 }
 
+// Which multiplexer the ttyd wrapper (ttyd-session.sh) routes this tab to.
+// tmux is the default backend; only an explicit `screen` arg switches it.
+// Leading modifiers (cwd:/name:/codex/claude) are skipped, mirroring
+// ttydSessionName() and the wrapper script.
+export function ttydSessionBackend(): 'tmux' | 'screen' {
+    try {
+        const args = new URLSearchParams(window.location.search).getAll('arg');
+        let i = 0;
+        while (i < args.length) {
+            const a = args[i];
+            if (
+                a.startsWith('cwd:') ||
+                a.startsWith('name:') ||
+                a === 'codex' ||
+                a.startsWith('codex:') ||
+                a === 'claude' ||
+                a.startsWith('claude:')
+            ) {
+                i++;
+            } else {
+                break;
+            }
+        }
+        return args[i] === 'screen' ? 'screen' : 'tmux';
+    } catch {
+        return 'tmux';
+    }
+}
+
 function sessionKey(prefix: string): string {
     return `${prefix}:${ttydSessionName()}`;
 }

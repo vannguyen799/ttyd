@@ -52,4 +52,7 @@ export interface KeyDef {
 
 export interface KeyRow {
     keys: KeyDef[];
+    // Only render this row when the active session is a tmux session
+    // (see ttydSessionBackend in storage.ts).
+    tmuxOnly?: boolean;
 }

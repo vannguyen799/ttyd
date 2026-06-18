@@ -315,6 +315,16 @@
     border-color: #2e4a6a;
   }
 
+  &.tmux {
+    background: #2c2440;
+    border-color: #4a3f6a;
+  }
+
+  &.danger {
+    background: #4a2424;
+    border-color: #7a3a3a;
+  }
+
   &.arrow-first {
     margin-left: 6px;
   }

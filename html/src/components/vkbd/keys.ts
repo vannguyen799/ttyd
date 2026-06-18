@@ -1,5 +1,11 @@
 import type { KeyRow } from './types';
 
+// tmux prefix is Ctrl-b (\x02). These combos drive tmux's default key
+// table — splits via %/", resize via prefix+Ctrl-arrow (repeatable),
+// and an explicit :kill-pane command so closing works without the
+// y/n confirm prompt (which has no key on a touch keyboard).
+const TMUX = '\x02';
+
 export const ROWS: KeyRow[] = [
     {
         keys: [
@@ -92,6 +98,57 @@ export const ROWS: KeyRow[] = [
             { label: 'F8', action: { type: 'named', key: 'f8' } },
             { label: 'F11', action: { type: 'named', key: 'f11' } },
             { label: 'F12', action: { type: 'named', key: 'f12' } },
+        ],
+    },
+    {
+        tmuxOnly: true,
+        keys: [
+            {
+                label: 'Split │',
+                sub: 'L | R',
+                action: { type: 'send', bytes: TMUX + '%' },
+                class: 'tmux',
+            },
+            {
+                label: 'Split ─',
+                sub: 'T / B',
+                action: { type: 'send', bytes: TMUX + '"' },
+                class: 'tmux',
+            },
+            {
+                label: '✕ Pane',
+                sub: 'kill',
+                action: { type: 'send', bytes: TMUX + ':kill-pane\r' },
+                class: 'tmux danger',
+            },
+            {
+                label: '⇲←',
+                sub: 'size',
+                action: { type: 'send', bytes: TMUX + '\x1b[1;5D' },
+                class: 'tmux',
+                repeat: true,
+            },
+            {
+                label: '⇲↑',
+                sub: 'size',
+                action: { type: 'send', bytes: TMUX + '\x1b[1;5A' },
+                class: 'tmux',
+                repeat: true,
+            },
+            {
+                label: '⇲↓',
+                sub: 'size',
+                action: { type: 'send', bytes: TMUX + '\x1b[1;5B' },
+                class: 'tmux',
+                repeat: true,
+            },
+            {
+                label: '⇲→',
+                sub: 'size',
+                action: { type: 'send', bytes: TMUX + '\x1b[1;5C' },
+                class: 'tmux',
+                repeat: true,
+            },
         ],
     },
 ];

@@ -11,6 +11,7 @@ import {
     loadInputHistory,
     pushInputHistory,
     ttydSessionName,
+    ttydSessionBackend,
     Settings,
 } from './storage';
 import { SettingsPanel } from './settings';
@@ -592,8 +593,10 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
 
     private buildRows(): { id: string; def: KeyDef }[][] {
         const disabled = new Set(this.state.settings.disabledIds);
+        const isTmux = ttydSessionBackend() === 'tmux';
         const rows: { id: string; def: KeyDef }[][] = [];
         ROWS.forEach((row, ri) => {
+            if (row.tmuxOnly && !isTmux) return;
             const filtered = row.keys
                 .map((k, ki) => ({ id: keyId(ri, ki, k), def: k }))
                 .filter(x => !disabled.has(x.id));
