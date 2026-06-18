@@ -2,12 +2,23 @@ import type { KeyDef } from './types';
 
 const STORAGE_KEY = 'ttyd.vkbd.v1';
 
+// Synthetic group that holds custom buttons not routed into a built-in
+// group. It's a valid target in the custom-button form and a valid entry
+// in disabledGroups, but it is not part of GROUPS in keys.ts.
+export const CUSTOM_GROUP_ID = 'custom';
+
+// A stored custom button. `group` is the id of the group it renders under
+// (a GROUPS id or CUSTOM_GROUP_ID); missing/unknown falls back to custom.
+export type CustomKey = KeyDef & { id: string; group?: string };
+
 export interface Settings {
     visible: boolean;
     position: 'bottom' | 'top';
     opacity: number;
     disabledIds: string[];
-    custom: (KeyDef & { id: string })[];
+    // Group ids (GROUPS / CUSTOM_GROUP_ID) hidden as a whole.
+    disabledGroups: string[];
+    custom: CustomKey[];
     pos: { x: number; y: number } | null;
     width: number | null;
     keyHeight: number | null;
@@ -16,6 +27,8 @@ export interface Settings {
     repeatDelayMs: number;
     repeatIntervalMs: number;
     showInput: boolean;
+    // Render a small caption above each group's rows.
+    showGroupLabels: boolean;
     termFontSize: number | null;
 }
 
@@ -47,6 +60,7 @@ const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width'> = {
     position: 'bottom',
     opacity: 0.92,
     disabledIds: [],
+    disabledGroups: [],
     custom: [],
     keyHeight: null,
     scrollStep: 5,
@@ -54,11 +68,14 @@ const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width'> = {
     repeatDelayMs: 350,
     repeatIntervalMs: 60,
     showInput: true,
+    showGroupLabels: false,
     termFontSize: null,
 };
 
-export function keyId(rowIndex: number, keyIndex: number, def: KeyDef): string {
-    return `b:${rowIndex}:${keyIndex}:${def.label}`;
+// Stable per-key id. Keyed by group id (not array position) so reordering
+// groups doesn't silently re-enable keys the user had disabled.
+export function keyId(groupId: string, rowIndex: number, keyIndex: number, def: KeyDef): string {
+    return `b:${groupId}:${rowIndex}:${keyIndex}:${def.label}`;
 }
 
 export function loadSettings(): Settings {

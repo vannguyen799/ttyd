@@ -61,3 +61,15 @@ export interface KeyRow {
     // (see ttydSessionBackend in storage.ts).
     tmuxOnly?: boolean;
 }
+
+// A named, toggleable cluster of rows. Groups give the keyboard a "level"
+// of organisation above rows: each group can be enabled/disabled as a unit
+// (settings.disabledGroups), individual keys inside it can still be toggled
+// (settings.disabledIds), and custom buttons can be routed into any group.
+export interface KeyGroup {
+    id: string;
+    title: string;
+    rows: KeyRow[];
+    // Only render this group for tmux-backed sessions.
+    tmuxOnly?: boolean;
+}

@@ -271,6 +271,22 @@
   }
 }
 
+.vkbd-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vkbd-group-label {
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.38);
+  padding: 0 2px;
+  margin-top: 2px;
+}
+
 .vkbd-row {
   display: flex;
   gap: 4px;
@@ -318,6 +334,11 @@
   &.tmux {
     background: #2c2440;
     border-color: #4a3f6a;
+  }
+
+  &.cmd {
+    background: #1d3a35;
+    border-color: #2f6358;
   }
 
   &.danger {
@@ -471,6 +492,50 @@
     color: #888;
     font-size: 11px;
   }
+}
+
+.vkbd-keygroup {
+  margin-bottom: 8px;
+
+  &.off {
+    .vkbd-grid {
+      opacity: 0.4;
+    }
+  }
+}
+
+.vkbd-keygroup-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #cdd2dc;
+  cursor: pointer;
+
+  &.inline {
+    margin-bottom: 0;
+    font-weight: 400;
+    font-size: 11px;
+    color: #8ab4f8;
+  }
+
+  input {
+    margin: 0;
+  }
+
+  em {
+    font-style: normal;
+    color: #777;
+    font-size: 10px;
+  }
+}
+
+.vkbd-custom-group {
+  font-style: normal;
+  color: #6f9a6f;
+  font-size: 10px;
 }
 
 .vkbd-grid {
@@ -646,6 +711,9 @@
     gap: 2px;
   }
   .vkbd-row {
+    gap: 2px;
+  }
+  .vkbd-group {
     gap: 2px;
   }
   .vkbd-key {

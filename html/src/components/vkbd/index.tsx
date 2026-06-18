@@ -1,11 +1,12 @@
 import { h, Component, JSX } from 'preact';
-import { ROWS } from './keys';
+import { GROUPS } from './keys';
 import { bytesForText, dispatch, emptyMods, ModState } from './actions';
 import {
     loadSettings,
     saveSettings,
     resetLayout,
     keyId,
+    CUSTOM_GROUP_ID,
     loadInputDraft,
     saveInputDraft,
     loadInputHistory,
@@ -588,23 +589,83 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
     }
 
     private countRows(): number {
-        return this.buildRows().length;
+        return this.buildGroups().reduce((n, g) => n + g.rows.length, 0);
     }
 
-    private buildRows(): { id: string; def: KeyDef }[][] {
-        const disabled = new Set(this.state.settings.disabledIds);
+    // Build the visible keyboard, grouped. Each group drops out entirely
+    // when it's tmux-only off-tmux or listed in disabledGroups; within a
+    // surviving group, per-key disabledIds are filtered, and custom buttons
+    // routed to that group are appended as a trailing row. Custom buttons
+    // with no/unknown group land in the synthetic Custom group.
+    private buildGroups(): { id: string; title: string; rows: { id: string; def: KeyDef }[][] }[] {
+        const disabledKeys = new Set(this.state.settings.disabledIds);
+        const disabledGroups = new Set(this.state.settings.disabledGroups);
         const isTmux = ttydSessionBackend() === 'tmux';
-        const rows: { id: string; def: KeyDef }[][] = [];
-        ROWS.forEach((row, ri) => {
-            if (row.tmuxOnly && !isTmux) return;
-            const filtered = row.keys
-                .map((k, ki) => ({ id: keyId(ri, ki, k), def: k }))
-                .filter(x => !disabled.has(x.id));
-            if (filtered.length) rows.push(filtered);
-        });
-        const custom = this.state.settings.custom.map(k => ({ id: k.id, def: k }));
-        if (custom.length) rows.push(custom);
-        return rows;
+
+        const knownIds = new Set(GROUPS.map(g => g.id));
+        const customByGroup = new Map<string, { id: string; def: KeyDef }[]>();
+        for (const c of this.state.settings.custom) {
+            if (disabledKeys.has(c.id)) continue;
+            const gid = c.group && knownIds.has(c.group) ? c.group : CUSTOM_GROUP_ID;
+            const bucket = customByGroup.get(gid) ?? [];
+            bucket.push({ id: c.id, def: c });
+            customByGroup.set(gid, bucket);
+        }
+
+        const out: { id: string; title: string; rows: { id: string; def: KeyDef }[][] }[] = [];
+        const build = (id: string, title: string, base: { keys: KeyDef[] }[], tmuxOnly?: boolean) => {
+            if (tmuxOnly && !isTmux) return;
+            if (disabledGroups.has(id)) return;
+            const rows: { id: string; def: KeyDef }[][] = [];
+            base.forEach((row, ri) => {
+                const filtered = row.keys
+                    .map((k, ki) => ({ id: keyId(id, ri, ki, k), def: k }))
+                    .filter(x => !disabledKeys.has(x.id));
+                if (filtered.length) rows.push(filtered);
+            });
+            const customs = customByGroup.get(id);
+            if (customs && customs.length) rows.push(customs);
+            if (rows.length) out.push({ id, title, rows });
+        };
+
+        GROUPS.forEach(g => build(g.id, g.title, g.rows, g.tmuxOnly));
+        build(CUSTOM_GROUP_ID, 'Custom', []);
+        return out;
+    }
+
+    private renderKey(id: string, def: KeyDef, keyStyleBase: JSX.CSSProperties) {
+        const active = this.isActive(def);
+        const locked = this.isLocked(def);
+        const isMod = def.action.type === 'mod';
+        const isRepeat = this.isRepeatable(def);
+        const cls = ['vkbd-key', def.class || '', active ? 'active' : '', locked ? 'locked' : '']
+            .filter(Boolean)
+            .join(' ');
+        const style: JSX.CSSProperties = { ...keyStyleBase };
+        if (def.flex) style.flex = def.flex;
+        const onPointerDown = isMod
+            ? (e: PointerEvent) => this.onModPointerDown(def, e)
+            : isRepeat
+            ? (e: PointerEvent) => this.onRepeatPointerDown(def, e)
+            : undefined;
+        const onPointerUp = isMod ? this.onModPointerUp : isRepeat ? this.onRepeatPointerUp : undefined;
+        return (
+            <button
+                key={id}
+                class={cls}
+                style={style}
+                onClick={() => this.onKeyClick(def)}
+                onDblClick={isMod ? () => this.onModDblClick(def) : undefined}
+                onPointerDown={onPointerDown}
+                onPointerMove={isMod ? this.onModPointerMove : undefined}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                onMouseDown={e => e.preventDefault()}
+            >
+                <span class="vkbd-label">{def.label}</span>
+                {def.sub ? <span class="vkbd-sub">{def.sub}</span> : null}
+            </button>
+        );
     }
 
     render() {
@@ -734,51 +795,14 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                                 </button>
                             </div>
                         ) : null}
-                        {this.buildRows().map((row, ri) => (
-                            <div class="vkbd-row" key={ri}>
-                                {row.map(({ id, def }) => {
-                                    const active = this.isActive(def);
-                                    const locked = this.isLocked(def);
-                                    const isMod = def.action.type === 'mod';
-                                    const isRepeat = this.isRepeatable(def);
-                                    const cls = [
-                                        'vkbd-key',
-                                        def.class || '',
-                                        active ? 'active' : '',
-                                        locked ? 'locked' : '',
-                                    ]
-                                        .filter(Boolean)
-                                        .join(' ');
-                                    const style: JSX.CSSProperties = { ...keyStyleBase };
-                                    if (def.flex) style.flex = def.flex;
-                                    const onPointerDown = isMod
-                                        ? (e: PointerEvent) => this.onModPointerDown(def, e)
-                                        : isRepeat
-                                        ? (e: PointerEvent) => this.onRepeatPointerDown(def, e)
-                                        : undefined;
-                                    const onPointerUp = isMod
-                                        ? this.onModPointerUp
-                                        : isRepeat
-                                        ? this.onRepeatPointerUp
-                                        : undefined;
-                                    return (
-                                        <button
-                                            key={id}
-                                            class={cls}
-                                            style={style}
-                                            onClick={() => this.onKeyClick(def)}
-                                            onDblClick={isMod ? () => this.onModDblClick(def) : undefined}
-                                            onPointerDown={onPointerDown}
-                                            onPointerMove={isMod ? this.onModPointerMove : undefined}
-                                            onPointerUp={onPointerUp}
-                                            onPointerCancel={onPointerUp}
-                                            onMouseDown={e => e.preventDefault()}
-                                        >
-                                            <span class="vkbd-label">{def.label}</span>
-                                            {def.sub ? <span class="vkbd-sub">{def.sub}</span> : null}
-                                        </button>
-                                    );
-                                })}
+                        {this.buildGroups().map(group => (
+                            <div class="vkbd-group" key={group.id}>
+                                {settings.showGroupLabels ? <div class="vkbd-group-label">{group.title}</div> : null}
+                                {group.rows.map((row, ri) => (
+                                    <div class="vkbd-row" key={ri}>
+                                        {row.map(({ id, def }) => this.renderKey(id, def, keyStyleBase))}
+                                    </div>
+                                ))}
                             </div>
                         ))}
                         <div

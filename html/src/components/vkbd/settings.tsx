@@ -1,9 +1,9 @@
 import { h, Component } from 'preact';
-import { ROWS } from './keys';
-import { keyId, genId, Settings } from './storage';
+import { GROUPS } from './keys';
+import { keyId, genId, CUSTOM_GROUP_ID, CustomKey, Settings } from './storage';
 import { decodeEscapes, encodeForDisplay } from './decode';
 import { bytesForNamed } from './actions';
-import type { KeyAction, KeyDef, NamedKey } from './types';
+import type { KeyAction, NamedKey } from './types';
 
 interface Props {
     settings: Settings;
@@ -12,13 +12,34 @@ interface Props {
     onReset: () => void;
 }
 
+// Groups a custom button can be routed into: the synthetic Custom group
+// plus every built-in group.
+const GROUP_OPTIONS: { id: string; title: string }[] = [
+    { id: CUSTOM_GROUP_ID, title: 'Custom' },
+    ...GROUPS.map(g => ({ id: g.id, title: g.title })),
+];
+
+function groupTitle(id: string | undefined): string {
+    if (!id || id === CUSTOM_GROUP_ID) return 'Custom';
+    return GROUPS.find(g => g.id === id)?.title ?? 'Custom';
+}
+
+// Every built-in per-key id, used by the global enable/disable-all toggle.
+function allKeyIds(): string[] {
+    const ids: string[] = [];
+    GROUPS.forEach(g => g.rows.forEach((row, ri) => row.keys.forEach((k, ki) => ids.push(keyId(g.id, ri, ki, k)))));
+    return ids;
+}
+
 interface FormState {
     editingId: string | null;
     label: string;
     sub: string;
+    group: string;
     mode: 'raw' | 'text' | 'key';
     rawBytes: string;
     text: string;
+    enterAfter: boolean;
     namedKey: NamedKey;
     ctrl: boolean;
     shift: boolean;
@@ -59,9 +80,11 @@ const EMPTY_FORM: FormState = {
     editingId: null,
     label: '',
     sub: '',
+    group: CUSTOM_GROUP_ID,
     mode: 'text',
     rawBytes: '',
     text: '',
+    enterAfter: false,
     namedKey: 'up',
     ctrl: false,
     shift: false,
@@ -86,13 +109,18 @@ export class SettingsPanel extends Component<Props, FormState> {
         this.update({ disabledIds: [...disabled] });
     };
 
+    private toggleGroup = (gid: string) => {
+        const disabled = new Set(this.props.settings.disabledGroups);
+        if (disabled.has(gid)) disabled.delete(gid);
+        else disabled.add(gid);
+        this.update({ disabledGroups: [...disabled] });
+    };
+
     private toggleAllBuiltin = (enable: boolean) => {
         if (enable) {
-            this.update({ disabledIds: [] });
+            this.update({ disabledIds: [], disabledGroups: [] });
         } else {
-            const ids: string[] = [];
-            ROWS.forEach((row, ri) => row.keys.forEach((k, ki) => ids.push(keyId(ri, ki, k))));
-            this.update({ disabledIds: ids });
+            this.update({ disabledIds: allKeyIds() });
         }
     };
 
@@ -100,13 +128,14 @@ export class SettingsPanel extends Component<Props, FormState> {
         this.update({ custom: this.props.settings.custom.filter(k => k.id !== id) });
     };
 
-    private startEdit = (k: KeyDef & { id: string }) => {
+    private startEdit = (k: CustomKey) => {
         const action = k.action;
         const form: FormState = {
             ...EMPTY_FORM,
             editingId: k.id,
             label: k.label,
             sub: k.sub || '',
+            group: k.group || CUSTOM_GROUP_ID,
         };
         if (action.type === 'send') {
             form.mode = 'raw';
@@ -125,15 +154,18 @@ export class SettingsPanel extends Component<Props, FormState> {
         if (s.mode === 'raw') {
             action = { type: 'send', bytes: decodeEscapes(s.rawBytes) };
         } else if (s.mode === 'text') {
-            action = { type: 'text', text: s.text };
+            // "Enter after" turns a plain text button into the type-and-submit
+            // (text + \r) pattern used by the built-in command shortcuts.
+            action = s.enterAfter ? { type: 'send', bytes: s.text + '\r' } : { type: 'text', text: s.text };
         } else {
             const mods = { ctrl: s.ctrl, shift: s.shift, alt: s.alt, meta: s.meta };
             action = { type: 'send', bytes: bytesForNamed(s.namedKey, mods) };
         }
-        const def: KeyDef & { id: string } = {
+        const def: CustomKey = {
             id: s.editingId || genId(),
             label: s.label.trim(),
             sub: s.sub.trim() || undefined,
+            group: s.group,
             action,
         };
         const existing = this.props.settings.custom;
@@ -149,6 +181,7 @@ export class SettingsPanel extends Component<Props, FormState> {
     render(props: Props, s: FormState) {
         const { settings } = props;
         const disabled = new Set(settings.disabledIds);
+        const disabledGroups = new Set(settings.disabledGroups);
         return (
             <div class="vkbd-settings" onClick={e => e.stopPropagation()}>
                 <div class="vkbd-settings-header">
@@ -214,6 +247,15 @@ export class SettingsPanel extends Component<Props, FormState> {
                             onChange={e => this.update({ showInput: (e.target as HTMLInputElement).checked })}
                         />
                         <span class="vkbd-hint">compose buffer + Send button</span>
+                    </div>
+                    <div class="vkbd-row-setting">
+                        <label>Group labels</label>
+                        <input
+                            type="checkbox"
+                            checked={settings.showGroupLabels}
+                            onChange={e => this.update({ showGroupLabels: (e.target as HTMLInputElement).checked })}
+                        />
+                        <span class="vkbd-hint">caption above each key group</span>
                     </div>
                     <div class="vkbd-row-setting">
                         <label>Term font</label>
@@ -311,29 +353,55 @@ export class SettingsPanel extends Component<Props, FormState> {
                             </button>
                         </span>
                     </div>
-                    <div class="vkbd-grid">
-                        {ROWS.map((row, ri) =>
-                            row.keys.map((k, ki) => {
-                                const id = keyId(ri, ki, k);
-                                const isDisabled = disabled.has(id);
-                                return (
-                                    <label key={id} class={`vkbd-check ${isDisabled ? 'off' : ''}`}>
-                                        <input
-                                            type="checkbox"
-                                            checked={!isDisabled}
-                                            onChange={() => this.toggleBuiltin(id)}
-                                        />
-                                        <span>{k.label}</span>
-                                        {k.sub ? <em>{k.sub}</em> : null}
-                                    </label>
-                                );
-                            })
-                        )}
-                    </div>
+                    {GROUPS.map(g => {
+                        const groupOff = disabledGroups.has(g.id);
+                        return (
+                            <div key={g.id} class={`vkbd-keygroup ${groupOff ? 'off' : ''}`}>
+                                <label class="vkbd-keygroup-head">
+                                    <input
+                                        type="checkbox"
+                                        checked={!groupOff}
+                                        onChange={() => this.toggleGroup(g.id)}
+                                    />
+                                    <span>{g.title}</span>
+                                    {g.tmuxOnly ? <em>tmux</em> : null}
+                                </label>
+                                <div class="vkbd-grid">
+                                    {g.rows.map((row, ri) =>
+                                        row.keys.map((k, ki) => {
+                                            const id = keyId(g.id, ri, ki, k);
+                                            const isDisabled = disabled.has(id);
+                                            return (
+                                                <label key={id} class={`vkbd-check ${isDisabled ? 'off' : ''}`}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={!isDisabled}
+                                                        onChange={() => this.toggleBuiltin(id)}
+                                                    />
+                                                    <span>{k.label}</span>
+                                                    {k.sub ? <em>{k.sub}</em> : null}
+                                                </label>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
 
                 <div class="vkbd-section">
-                    <div class="vkbd-section-title">Custom combos</div>
+                    <div class="vkbd-section-title">
+                        Custom combos
+                        <label class="vkbd-keygroup-head inline">
+                            <input
+                                type="checkbox"
+                                checked={!disabledGroups.has(CUSTOM_GROUP_ID)}
+                                onChange={() => this.toggleGroup(CUSTOM_GROUP_ID)}
+                            />
+                            <span>Custom group</span>
+                        </label>
+                    </div>
                     {settings.custom.length === 0 ? (
                         <div class="vkbd-empty">No custom combos yet.</div>
                     ) : (
@@ -343,6 +411,7 @@ export class SettingsPanel extends Component<Props, FormState> {
                                     <span class="vkbd-custom-label">
                                         <strong>{k.label}</strong>
                                         {k.sub ? <em> {k.sub}</em> : null}
+                                        <em class="vkbd-custom-group"> → {groupTitle(k.group)}</em>
                                     </span>
                                     <span class="vkbd-custom-preview">
                                         {k.action.type === 'send'
@@ -377,6 +446,20 @@ export class SettingsPanel extends Component<Props, FormState> {
                                 value={s.sub}
                                 onInput={e => this.setState({ sub: (e.target as HTMLInputElement).value })}
                             />
+                        </div>
+                        <div class="vkbd-form-row">
+                            <label>Group</label>
+                            <select
+                                value={s.group}
+                                onChange={e => this.setState({ group: (e.target as HTMLSelectElement).value })}
+                            >
+                                {GROUP_OPTIONS.map(g => (
+                                    <option key={g.id} value={g.id}>
+                                        {g.title}
+                                    </option>
+                                ))}
+                            </select>
+                            <span class="vkbd-hint">where this button appears</span>
                         </div>
                         <div class="vkbd-form-row">
                             <label>
@@ -423,10 +506,20 @@ export class SettingsPanel extends Component<Props, FormState> {
                                 <input
                                     type="text"
                                     class="wide"
-                                    placeholder={'Text to type (supports \\n, \\t)'}
+                                    placeholder={'Text to type (e.g. /clear or claude --...)'}
                                     value={s.text}
                                     onInput={e => this.setState({ text: (e.target as HTMLInputElement).value })}
                                 />
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        checked={s.enterAfter}
+                                        onChange={e =>
+                                            this.setState({ enterAfter: (e.target as HTMLInputElement).checked })
+                                        }
+                                    />{' '}
+                                    Enter after ↵
+                                </label>
                             </div>
                         ) : null}
                         {s.mode === 'key' ? (
