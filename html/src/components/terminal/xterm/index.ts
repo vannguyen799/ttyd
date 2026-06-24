@@ -120,6 +120,10 @@ export class Xterm {
     private reconnect = true;
     private doReconnect = true;
     private closeOnDisconnect = false;
+    private reconnecting = false;
+    private autoReconnectSetup = false;
+    private resumeDisposables: IDisposable[] = [];
+    private pendingReconnectKey?: IDisposable;
 
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
     private fitRaf = 0;
@@ -374,6 +378,54 @@ export class Xterm {
             focus: () => terminal.focus(),
             vkbdHook: prevHook,
         };
+
+        this.setupAutoReconnect();
+    }
+
+    // Auto-reconnect when the page becomes visible again. On mobile
+    // (iOS/Android) backgrounding the browser or locking the screen freezes
+    // the page and tears down the WebSocket — often with an `error` event
+    // first, which clears doReconnect, so the normal close path lands on the
+    // "Press ⏎ to Reconnect" prompt that's awkward to trigger on a phone.
+    // Listening for visibility/focus/pageshow/online lets us reconnect the
+    // moment the user returns to the tab, with no keypress needed. Registered
+    // once and intentionally kept for the page lifetime — it must survive the
+    // per-socket dispose() that runs on every reconnect.
+    @bind
+    private setupAutoReconnect() {
+        if (this.autoReconnectSetup) return;
+        this.autoReconnectSetup = true;
+
+        const resume = () => {
+            if (document.visibilityState !== 'visible') return;
+            if (!this.opened) return;
+            // Respect explicit opt-outs.
+            if (!this.reconnect || this.closeOnDisconnect) return;
+            // A reconnect is already in flight, or the socket is still healthy.
+            if (this.reconnecting) return;
+            const rs = this.socket?.readyState;
+            if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return;
+            console.log('[ttyd] page visible, socket not open — auto-reconnecting');
+            this.startReconnect();
+        };
+
+        this.resumeDisposables.push(
+            addEventListener(document, 'visibilitychange', resume),
+            addEventListener(window, 'pageshow', resume),
+            addEventListener(window, 'focus', resume),
+            addEventListener(window, 'online', resume)
+        );
+    }
+
+    @bind
+    private startReconnect() {
+        this.reconnecting = true;
+        this.doReconnect = true;
+        this.pendingReconnectKey?.dispose();
+        this.pendingReconnectKey = undefined;
+        this.overlayAddon.showOverlay('Reconnecting...');
+        this.dispose();
+        this.refreshToken().then(this.connect);
     }
 
     @bind
@@ -467,6 +519,10 @@ export class Xterm {
     private onSocketOpen() {
         console.log('[ttyd] websocket connection opened');
 
+        this.reconnecting = false;
+        this.pendingReconnectKey?.dispose();
+        this.pendingReconnectKey = undefined;
+
         const { textEncoder, terminal, overlayAddon } = this;
         const msg = JSON.stringify({ AuthToken: this.token, columns: terminal.cols, rows: terminal.rows });
         this.socket?.send(textEncoder.encode(msg));
@@ -493,25 +549,26 @@ export class Xterm {
     private onSocketClose(event: CloseEvent) {
         console.log(`[ttyd] websocket connection closed with code: ${event.code}`);
 
-        const { refreshToken, connect, doReconnect, overlayAddon } = this;
+        const { overlayAddon } = this;
         overlayAddon.showOverlay('Connection Closed');
+        this.reconnecting = false;
+        this.pendingReconnectKey?.dispose();
+        this.pendingReconnectKey = undefined;
         this.dispose();
 
         // 1000: CLOSE_NORMAL
-        if (event.code !== 1000 && doReconnect) {
-            overlayAddon.showOverlay('Reconnecting...');
-            refreshToken().then(connect);
+        if (event.code !== 1000 && this.doReconnect) {
+            this.startReconnect();
         } else if (this.closeOnDisconnect) {
             window.close();
         } else {
+            // No auto-reconnect (normal close, or doReconnect was cleared by a
+            // socket error). Offer a manual reconnect on Enter, but leave
+            // `reconnecting` false so the visibility handler can still take over
+            // when the user returns to a backgrounded mobile tab.
             const { terminal } = this;
-            const keyDispose = terminal.onKey(e => {
-                const event = e.domEvent;
-                if (event.key === 'Enter') {
-                    keyDispose.dispose();
-                    overlayAddon.showOverlay('Reconnecting...');
-                    refreshToken().then(connect);
-                }
+            this.pendingReconnectKey = terminal.onKey(e => {
+                if (e.domEvent.key === 'Enter') this.startReconnect();
             });
             overlayAddon.showOverlay('Press ⏎ to Reconnect');
         }
