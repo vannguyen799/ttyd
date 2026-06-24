@@ -190,11 +190,30 @@ export class Xterm {
 
     @bind
     public async refreshToken() {
+        // Persist the credential client-side so an expiring browser Basic-Auth
+        // cache (Chrome/Safari drop it after a few hours) doesn't pop a fresh
+        // login dialog on the next reconnect. ttyd's /token returns
+        // base64("user:pass") — the exact string its check_auth() wants in the
+        // Authorization header — so a saved token can be replayed verbatim.
+        const CRED_KEY = 'ttyd.cred.v1';
+        const stored = localStorage.getItem(CRED_KEY) || '';
+        const fetchToken = (cred: string) =>
+            fetch(this.options.tokenUrl, cred ? { headers: { Authorization: `Basic ${cred}` } } : undefined);
         try {
-            const resp = await fetch(this.options.tokenUrl);
+            let resp = await fetchToken(stored);
+            // Saved credential rejected (e.g. password rotated server-side):
+            // forget it and retry unauthenticated so the browser prompts once
+            // to re-capture, restoring the original gating behaviour.
+            if (resp.status === 401 && stored) {
+                localStorage.removeItem(CRED_KEY);
+                resp = await fetchToken('');
+            }
             if (resp.ok) {
                 const json = await resp.json();
                 this.token = json.token;
+                // Empty token = server started with --no-auth; nothing to save.
+                if (this.token) localStorage.setItem(CRED_KEY, this.token);
+                else localStorage.removeItem(CRED_KEY);
             }
         } catch (e) {
             console.error(`[ttyd] fetch ${this.options.tokenUrl}: `, e);
