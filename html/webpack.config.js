@@ -6,8 +6,23 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
+const fs = require('fs');
 
 const devMode = process.env.NODE_ENV !== 'production';
+
+// ttyd Basic Auth credential, base64("user:pass") — the same value ttyd's
+// /token endpoint returns and what its check_auth() compares against. Read
+// lazily (per WS upgrade) so a rotated password is picked up without
+// restarting webpack. Source: TTYD_CREDENTIAL env, else the file written by
+// start-ttyd.sh.
+function readTtydCredential() {
+    if (process.env.TTYD_CREDENTIAL) return process.env.TTYD_CREDENTIAL.trim();
+    try {
+        return fs.readFileSync(process.env.TTYD_CRED_FILE || '/tmp/ttyd.cred', 'utf8').trim();
+    } catch {
+        return '';
+    }
+}
 
 const baseConfig = {
     context: path.resolve(__dirname, 'src'),
@@ -78,6 +93,19 @@ const devConfig = {
                 context: ['/token', '/ws'],
                 target: 'http://localhost:7681',
                 ws: true,
+                // Safari/iOS (WebKit) does not send the Authorization header on
+                // the WebSocket upgrade, so ttyd's check_auth() rejects the
+                // handshake (ECONNRESET) even after the user passed Basic Auth.
+                // We control the webpack→ttyd hop, so inject the Basic
+                // credential here. onProxyReqWs only fires for the /ws upgrade —
+                // /token stays untouched, so its 401 still gates access via the
+                // browser login dialog. Security is unchanged: the WS still
+                // requires a valid AuthToken message, obtainable only from the
+                // Basic-Auth-protected /token.
+                onProxyReqWs: proxyReq => {
+                    const cred = readTtydCredential();
+                    if (cred) proxyReq.setHeader('Authorization', `Basic ${cred}`);
+                },
             },
         ],
         webSocketServer: {
