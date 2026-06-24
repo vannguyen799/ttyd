@@ -245,6 +245,33 @@ export class Xterm {
                     this.sendData(bytes);
                     hook.consume();
                 });
+
+                // On coarse-pointer devices (mobile) the OS keyboard pops up
+                // whenever this hidden textarea is focused — and xterm focuses
+                // it from many non-typing paths: synthesized wheel events from
+                // the vkbd scroll keys, reconnect-time focus, the vkbd's own
+                // post-action focus, etc. That makes the Android keyboard
+                // appear on plain vkbd button taps the user never meant as
+                // "start typing". Default the textarea to inputmode="none" (it
+                // stays focusable, so xterm keeps receiving key events, but the
+                // OS keyboard never shows) and only promote it to
+                // inputmode="text" when the user genuinely taps the terminal
+                // itself. Reset on blur so the next programmatic focus stays
+                // silent. The blur() defenses in the vkbd remain as backup.
+                const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+                if (coarse) {
+                    ta.inputMode = 'none';
+                    terminal.element?.addEventListener(
+                        'pointerdown',
+                        (event: Event) => {
+                            if (event.isTrusted) ta.inputMode = 'text';
+                        },
+                        true
+                    );
+                    ta.addEventListener('blur', () => {
+                        ta.inputMode = 'none';
+                    });
+                }
             }
         } catch {
             // ignore
