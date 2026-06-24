@@ -230,20 +230,41 @@ export class Xterm {
         // (which only sees keydown).
         try {
             const ta = terminal.element?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
+            const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
             if (ta) {
                 ta.addEventListener('beforeinput', (event: InputEvent) => {
                     if (event.inputType !== 'insertText' && event.inputType !== 'insertCompositionText') return;
-                    const hook = window.ttyd?.vkbdHook;
-                    if (!hook) return;
-                    const vm = hook.getMods();
-                    if (!vm.ctrl && !vm.shift && !vm.alt && !vm.meta) return;
                     const data = event.data;
-                    if (!data) return;
-                    event.preventDefault();
-                    let bytes = '';
-                    for (const ch of data) bytes += bytesForText(ch, vm);
-                    this.sendData(bytes);
-                    hook.consume();
+                    const hook = window.ttyd?.vkbdHook;
+                    const vm = hook?.getMods();
+                    const hasMods = !!vm && (vm.ctrl || vm.shift || vm.alt || vm.meta);
+
+                    // (1) Virtual modifiers tapped on the vkbd, applied to
+                    // Android/IME keystrokes typed directly on the terminal.
+                    if (hook && vm && hasMods) {
+                        if (!data) return;
+                        event.preventDefault();
+                        let bytes = '';
+                        for (const ch of data) bytes += bytesForText(ch, vm);
+                        this.sendData(bytes);
+                        hook.consume();
+                        return;
+                    }
+
+                    // (2) Android reliability: xterm.js reads typed input from
+                    // this hidden textarea via its CompositionHelper, and on
+                    // Android (Gboard composes every word even with suggestions
+                    // off) fast typing drops characters at composition
+                    // boundaries. For COMMITTED, non-composition text deliver it
+                    // straight to the PTY and preventDefault so the textarea
+                    // never changes — xterm therefore can't double-send.
+                    // Composition input (event.isComposing / Vietnamese Telex,
+                    // CJK) is left untouched so diacritic/IME composition keeps
+                    // working through xterm's normal path.
+                    if (coarse && event.inputType === 'insertText' && !event.isComposing && data) {
+                        event.preventDefault();
+                        this.sendData(data);
+                    }
                 });
 
                 // On coarse-pointer devices (mobile) the OS keyboard pops up
@@ -258,7 +279,6 @@ export class Xterm {
                 // inputmode="text" when the user genuinely taps the terminal
                 // itself. Reset on blur so the next programmatic focus stays
                 // silent. The blur() defenses in the vkbd remain as backup.
-                const coarse = window.matchMedia?.('(pointer: coarse)').matches;
                 if (coarse) {
                     ta.inputMode = 'none';
                     terminal.element?.addEventListener(
