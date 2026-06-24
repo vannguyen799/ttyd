@@ -103,6 +103,12 @@
   -webkit-appearance: none;
   min-height: 30px;
   max-height: calc(1.35em * 3 + 14px);
+  // Re-enable selection here: the .vkbd container sets user-select: none to
+  // stop key long-presses selecting text, but that is inherited and would
+  // suppress the native copy/paste selection toolbar on Android.
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
 
   &:focus {
     border-color: #5a8dd6;

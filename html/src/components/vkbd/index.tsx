@@ -246,6 +246,14 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
 
     private inputEl: HTMLTextAreaElement | null = null;
 
+    private onContextMenu = (e: Event) => {
+        // Suppress the browser context menu when long-pressing keys, but allow
+        // the native selection/copy toolbar inside the input textarea (Android).
+        const target = e.target as Element | null;
+        if (target?.closest?.('.vkbd-input')) return;
+        e.preventDefault();
+    };
+
     private onInputKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -698,7 +706,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                         ⌨
                     </button>
                 ) : (
-                    <div class="vkbd" style={kbdStyle} onContextMenu={e => e.preventDefault()}>
+                    <div class="vkbd" style={kbdStyle} onContextMenu={this.onContextMenu}>
                         <div class="vkbd-toolbar">
                             <button class="vkbd-icon-btn" onClick={this.openSettings} aria-label="Settings">
                                 ⚙
