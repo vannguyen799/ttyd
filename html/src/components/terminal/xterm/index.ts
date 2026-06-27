@@ -128,6 +128,9 @@ export class Xterm {
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
     private fitRaf = 0;
 
+    private selTip: HTMLDivElement | null = null;
+    private selTipDismiss: (() => void) | null = null;
+
     constructor(
         private options: XtermOptions,
         private sendCb: () => void
@@ -171,10 +174,76 @@ export class Xterm {
             cancelAnimationFrame(this.fitRaf);
             this.fitRaf = 0;
         }
+        this.hideSelTip();
         for (const d of this.disposables) {
             d.dispose();
         }
         this.disposables.length = 0;
+    }
+
+    private showSelTip(sel: string) {
+        this.hideSelTip();
+
+        const tip = document.createElement('div');
+        tip.className = 'ttyd-sel-tip';
+
+        const txt = document.createElement('span');
+        txt.className = 'ttyd-sel-tip-text';
+        const firstLine = sel.split('\n')[0].trim() || sel.trimStart().split('\n')[0];
+        txt.textContent = firstLine.length > 72 ? firstLine.slice(0, 72) + '…' : firstLine;
+
+        const btn = document.createElement('button');
+        btn.className = 'ttyd-sel-tip-copy';
+        btn.textContent = '⎘ Copy';
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            void window.ttyd?.copySelection();
+            this.hideSelTip();
+        });
+
+        tip.appendChild(txt);
+        tip.appendChild(btn);
+        // Clicking inside the tip must not trigger the outside-click dismiss.
+        tip.addEventListener('pointerdown', e => e.stopPropagation());
+
+        // Position just below the end of the selection, clamped to viewport.
+        const el = this.terminal?.element;
+        const pos = this.terminal?.getSelectionPosition?.();
+        if (pos && el) {
+            const rect = el.getBoundingClientRect();
+            const cellH = rect.height / this.terminal.rows;
+            const cellW = rect.width / this.terminal.cols;
+            const tx = Math.max(4, Math.min(rect.left + pos.end.x * cellW, window.innerWidth - 248));
+            const ty = Math.max(4, Math.min(rect.top + (pos.end.y + 1) * cellH + 6, window.innerHeight - 44));
+            tip.style.left = tx + 'px';
+            tip.style.top = ty + 'px';
+        } else if (el) {
+            const rect = el.getBoundingClientRect();
+            tip.style.left = rect.left + 8 + 'px';
+            tip.style.top = rect.bottom - 44 + 'px';
+        }
+
+        document.body.appendChild(tip);
+        this.selTip = tip;
+
+        // Attach outside-click dismiss after a short delay so the pointer-up
+        // that finished the drag selection doesn't immediately fire it.
+        const dismiss = () => this.hideSelTip();
+        const timer = window.setTimeout(() => {
+            document.addEventListener('pointerdown', dismiss, { once: true });
+            this.selTipDismiss = () => document.removeEventListener('pointerdown', dismiss);
+        }, 200);
+        this.selTipDismiss = () => {
+            window.clearTimeout(timer);
+            document.removeEventListener('pointerdown', dismiss);
+        };
+    }
+
+    private hideSelTip() {
+        this.selTipDismiss?.();
+        this.selTipDismiss = null;
+        this.selTip?.remove();
+        this.selTip = null;
     }
 
     @bind
@@ -511,12 +580,13 @@ export class Xterm {
         register(
             terminal.onSelectionChange(() => {
                 const sel = this.terminal.getSelection();
-                if (!sel) return;
-                // Show selection size. Auto-copy is unreliable outside a direct
-                // user-gesture handler on Safari/Chrome Mac \u2014 use Cmd+C or the
-                // vkbd Copy button for a reliable clipboard write.
+                if (!sel) {
+                    this.hideSelTip();
+                    return;
+                }
                 const lines = sel.split('\n').length;
                 this.overlayAddon?.showOverlay(`${sel.length}c/${lines}L \u2702`, 1200);
+                this.showSelTip(sel);
             })
         );
         register(addEventListener(window, 'resize', () => this.safeFit()));

@@ -1,34 +1,86 @@
 @import '../components/vkbd/style.scss';
 
+// Floating selection tooltip — shows selected text preview + Copy button.
+// Appears just below the end of the xterm selection, styled to match the
+// dark terminal aesthetic. Dismissed on outside click or deselect.
+.ttyd-sel-tip {
+    position: fixed;
+    z-index: 9998;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px 5px 10px;
+    max-width: 360px;
+    background: rgba(24, 24, 24, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 7px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(6px);
+    pointer-events: auto;
+    user-select: none;
+
+    .ttyd-sel-tip-text {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: rgba(255, 255, 255, 0.75);
+        font-family: monospace;
+        font-size: 11.5px;
+        line-height: 1.4;
+    }
+
+    .ttyd-sel-tip-copy {
+        flex-shrink: 0;
+        padding: 3px 9px;
+        background: rgba(255, 255, 255, 0.11);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 5px;
+        color: #fff;
+        font-size: 11px;
+        font-family: system-ui, sans-serif;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.12s;
+
+        &:hover {
+            background: rgba(255, 255, 255, 0.22);
+        }
+        &:active {
+            background: rgba(255, 255, 255, 0.32);
+        }
+    }
+}
+
 html,
 body {
-  height: 100%;
-  min-height: 100%;
-  margin: 0;
-  overflow: hidden;
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
+    overflow: hidden;
 }
 
 .app-root {
-  height: 100%;
-  display: block;
+    height: 100%;
+    display: block;
 }
 
 body.vkbd-docked-bottom #terminal-container {
-  height: calc(100% - var(--vkbd-dock-height, 0px));
+    height: calc(100% - var(--vkbd-dock-height, 0px));
 }
 
 body.vkbd-docked-top #terminal-container {
-  height: calc(100% - var(--vkbd-dock-height, 0px));
-  margin-top: var(--vkbd-dock-height, 0px);
+    height: calc(100% - var(--vkbd-dock-height, 0px));
+    margin-top: var(--vkbd-dock-height, 0px);
 }
 
 #terminal-container {
-  width: auto;
-  height: 100%;
-  margin: 0 auto;
-  padding: 0;
-  .terminal {
-    padding: 5px;
-    height: calc(100% - 10px);
-  }
+    width: auto;
+    height: 100%;
+    margin: 0 auto;
+    padding: 0;
+    .terminal {
+        padding: 5px;
+        height: calc(100% - 10px);
+    }
 }

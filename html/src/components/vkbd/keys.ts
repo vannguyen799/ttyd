@@ -182,6 +182,19 @@ export const GROUPS: KeyGroup[] = [
             {
                 keys: [
                     {
+                        // Scroll the current pane back to the bottom (latest output).
+                        // Uses tmux's scroll-to-bottom command via the command prompt,
+                        // same pattern as kill-pane above. Equivalent to Ctrl+End in
+                        // desktop terminal emulators.
+                        label: '⏷ Last',
+                        sub: 'Ctrl+End',
+                        action: {
+                            type: 'seq',
+                            steps: [{ bytes: TMUX + ':' }, { bytes: 'scroll-to-bottom\r', delay: 80 }],
+                        },
+                        class: 'tmux',
+                    },
+                    {
                         label: 'Split │',
                         sub: 'L | R',
                         action: { type: 'send', bytes: TMUX + '%' },
