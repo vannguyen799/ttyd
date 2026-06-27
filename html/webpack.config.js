@@ -31,7 +31,13 @@ const baseConfig = {
     },
     output: {
         path: path.resolve(__dirname, 'dist'),
-        filename: devMode ? '[name].js' : '[name].[contenthash].js',
+        // Content-hash the bundle in BOTH dev and prod. Mobile browsers
+        // (iOS Safari / Android Chrome) cache `app.js` aggressively and a
+        // plain refresh keeps serving the stale file because the URL never
+        // changes — even with Cache-Control: no-store. Hashing the filename
+        // forces a fresh fetch on every rebuild: the no-store HTML always
+        // points at the new `app.<hash>.js`, which the browser has never seen.
+        filename: '[name].[contenthash].js',
     },
     module: {
         rules: [
