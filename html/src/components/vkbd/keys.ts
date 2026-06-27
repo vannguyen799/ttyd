@@ -233,6 +233,19 @@ export const GROUPS: KeyGroup[] = [
                         class: 'tmux',
                         repeat: true,
                     },
+                    {
+                        // Emit the current tmux copy-buffer as an OSC 52 sequence.
+                        // xterm's ClipboardAddon intercepts OSC 52 and writes the
+                        // payload to the system clipboard — no clipboard-write
+                        // permission required. Works even on HTTP/Safari.
+                        label: 'buf→clip',
+                        sub: 'tmux buf',
+                        action: {
+                            type: 'send',
+                            bytes: "printf '\\e]52;c;%s\\a' \"$(tmux show-buffer 2>/dev/null | base64 | tr -d '\\n')\"\r",
+                        },
+                        class: 'tmux',
+                    },
                 ],
             },
         ],

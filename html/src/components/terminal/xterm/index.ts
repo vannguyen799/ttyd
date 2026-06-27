@@ -322,6 +322,38 @@ export class Xterm {
 
         terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
             if (event.type !== 'keydown') return true;
+
+            // Mac Cmd+C or cross-platform Ctrl+Shift+C: copy selection.
+            // Called directly in a keydown handler so navigator.clipboard is
+            // available under the browser's user-gesture requirement (Safari
+            // and Chrome both block clipboard writes outside trusted events).
+            const isMacCopy = event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.key === 'c';
+            const isCtrlShiftCopy =
+                event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && event.key === 'C';
+            if (isMacCopy || isCtrlShiftCopy) {
+                const sel = terminal.getSelection();
+                if (sel) {
+                    void (
+                        navigator.clipboard
+                            ? navigator.clipboard.writeText(sel)
+                            : Promise.reject(new Error('no clipboard'))
+                    )
+                        .then(() => this.overlayAddon?.showOverlay('✂', 300))
+                        .catch(() => {
+                            try {
+                                document.execCommand('copy');
+                                this.overlayAddon?.showOverlay('✂', 300);
+                            } catch {
+                                // ignore
+                            }
+                        });
+                    return false;
+                }
+                // No selection on Mac: suppress Cmd+C so it doesn't emit meta+c escape.
+                if (isMacCopy) return false;
+                return true;
+            }
+
             const hook = window.ttyd?.vkbdHook;
             if (!hook) return true;
             const vm = hook.getMods();
@@ -389,9 +421,19 @@ export class Xterm {
                 const sel = terminal.getSelection();
                 if (!sel) return;
                 try {
-                    await navigator.clipboard.writeText(sel);
-                } catch (e) {
-                    console.warn('[ttyd] copy failed', e);
+                    if (navigator.clipboard) {
+                        await navigator.clipboard.writeText(sel);
+                    } else {
+                        document.execCommand('copy');
+                    }
+                    this.overlayAddon?.showOverlay('✂', 300);
+                } catch {
+                    try {
+                        document.execCommand('copy');
+                        this.overlayAddon?.showOverlay('✂', 300);
+                    } catch (e2) {
+                        console.warn('[ttyd] copy failed', e2);
+                    }
                 }
             },
             focus: () => terminal.focus(),
@@ -468,13 +510,13 @@ export class Xterm {
         );
         register(
             terminal.onSelectionChange(() => {
-                if (this.terminal.getSelection() === '') return;
-                try {
-                    document.execCommand('copy');
-                } catch (e) {
-                    return;
-                }
-                this.overlayAddon?.showOverlay('\u2702', 200);
+                const sel = this.terminal.getSelection();
+                if (!sel) return;
+                // Show selection size. Auto-copy is unreliable outside a direct
+                // user-gesture handler on Safari/Chrome Mac \u2014 use Cmd+C or the
+                // vkbd Copy button for a reliable clipboard write.
+                const lines = sel.split('\n').length;
+                this.overlayAddon?.showOverlay(`${sel.length}c/${lines}L \u2702`, 1200);
             })
         );
         register(addEventListener(window, 'resize', () => this.safeFit()));
