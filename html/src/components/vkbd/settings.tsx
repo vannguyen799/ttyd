@@ -171,7 +171,10 @@ export class SettingsPanel extends Component<Props, FormState> {
         const existing = this.props.settings.custom;
         const next = s.editingId ? existing.map(k => (k.id === s.editingId ? def : k)) : [...existing, def];
         this.update({ custom: next });
-        this.setState({ ...EMPTY_FORM });
+        // Clear the entered values but KEEP the target group and input mode, so
+        // adding several buttons to the same group in a row doesn't snap the
+        // dropdown back to "Custom" after each save (felt like the group reset).
+        this.setState({ ...EMPTY_FORM, group: s.group, mode: s.mode });
     };
 
     private cancelForm = () => {
