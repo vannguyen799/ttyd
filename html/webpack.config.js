@@ -82,6 +82,9 @@ const devConfig = {
         static: path.join(__dirname, 'dist'),
         compress: true,
         port: 9000,
+        headers: {
+            'Cache-Control': 'no-store',
+        },
         client: {
             overlay: {
                 errors: true,

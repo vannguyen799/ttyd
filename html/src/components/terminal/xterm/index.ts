@@ -130,6 +130,8 @@ export class Xterm {
 
     private selTip: HTMLDivElement | null = null;
     private selTipDismiss: (() => void) | null = null;
+    private selTipDebounce = 0;
+    private lastSel = '';
 
     constructor(
         private options: XtermOptions,
@@ -181,38 +183,76 @@ export class Xterm {
         this.disposables.length = 0;
     }
 
+    // Copy text to clipboard: modern API first, textarea-execCommand fallback
+    // for HTTP contexts where navigator.clipboard is unavailable.
+    // Must be called within a user-gesture handler (click/keydown).
+    private doCopy(text: string): Promise<void> {
+        if (!text) return Promise.resolve();
+        if (navigator.clipboard?.writeText) {
+            return navigator.clipboard.writeText(text);
+        }
+        return new Promise((res, rej) => {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;';
+            document.body.appendChild(ta);
+            ta.focus({ preventScroll: true });
+            ta.select();
+            const ok = (() => {
+                try {
+                    return document.execCommand('copy');
+                } catch {
+                    return false;
+                }
+            })();
+            document.body.removeChild(ta);
+            ok ? res() : rej(new Error('copy failed'));
+        });
+    }
+
     private showSelTip(sel: string) {
-        this.hideSelTip();
+        // Debounce: only commit the tooltip 180ms after the last selection
+        // change so it doesn't flicker during mouse-drag.
+        window.clearTimeout(this.selTipDebounce);
+        this.selTipDebounce = window.setTimeout(() => {
+            this._renderSelTip(sel);
+        }, 180);
+    }
+
+    private _renderSelTip(sel: string) {
+        // Remove any previous tip before creating a new one.
+        this.selTipDismiss?.();
+        this.selTipDismiss = null;
+        this.selTip?.remove();
+        this.selTip = null;
 
         const tip = document.createElement('div');
         tip.className = 'ttyd-sel-tip';
 
         const txt = document.createElement('span');
         txt.className = 'ttyd-sel-tip-text';
-        const firstLine = sel.split('\n')[0].trim() || sel.trimStart().split('\n')[0];
-        txt.textContent = firstLine.length > 72 ? firstLine.slice(0, 72) + '…' : firstLine;
+        const firstLine = sel.split('\n')[0].trimEnd();
+        txt.textContent = firstLine.length > 72 ? firstLine.slice(0, 72) + '…' : firstLine || sel.slice(0, 72);
 
         const btn = document.createElement('button');
         btn.className = 'ttyd-sel-tip-copy';
         btn.textContent = '⎘ Copy';
         btn.addEventListener('click', e => {
             e.stopPropagation();
-            void window.ttyd?.copySelection();
+            void this.doCopy(sel).then(() => this.overlayAddon?.showOverlay('✂', 300));
             this.hideSelTip();
         });
 
         tip.appendChild(txt);
         tip.appendChild(btn);
-        // Clicking inside the tip must not trigger the outside-click dismiss.
         tip.addEventListener('pointerdown', e => e.stopPropagation());
 
-        // Position just below the end of the selection, clamped to viewport.
         const el = this.terminal?.element;
         const pos = this.terminal?.getSelectionPosition?.();
         if (pos && el) {
             const rect = el.getBoundingClientRect();
-            const cellH = rect.height / this.terminal.rows;
-            const cellW = rect.width / this.terminal.cols;
+            const cellH = rect.height / Math.max(1, this.terminal.rows);
+            const cellW = rect.width / Math.max(1, this.terminal.cols);
             const tx = Math.max(4, Math.min(rect.left + pos.end.x * cellW, window.innerWidth - 248));
             const ty = Math.max(4, Math.min(rect.top + (pos.end.y + 1) * cellH + 6, window.innerHeight - 44));
             tip.style.left = tx + 'px';
@@ -220,26 +260,30 @@ export class Xterm {
         } else if (el) {
             const rect = el.getBoundingClientRect();
             tip.style.left = rect.left + 8 + 'px';
-            tip.style.top = rect.bottom - 44 + 'px';
+            tip.style.top = Math.min(rect.bottom - 48, window.innerHeight - 44) + 'px';
         }
 
         document.body.appendChild(tip);
         this.selTip = tip;
 
-        // Attach outside-click dismiss after a short delay so the pointer-up
-        // that finished the drag selection doesn't immediately fire it.
         const dismiss = () => this.hideSelTip();
-        const timer = window.setTimeout(() => {
+        // Small delay so the pointerup that ended the drag doesn't immediately dismiss.
+        const t = window.setTimeout(() => {
             document.addEventListener('pointerdown', dismiss, { once: true });
-            this.selTipDismiss = () => document.removeEventListener('pointerdown', dismiss);
-        }, 200);
+            this.selTipDismiss = () => {
+                window.clearTimeout(t);
+                document.removeEventListener('pointerdown', dismiss);
+            };
+        }, 250);
         this.selTipDismiss = () => {
-            window.clearTimeout(timer);
+            window.clearTimeout(t);
             document.removeEventListener('pointerdown', dismiss);
         };
     }
 
     private hideSelTip() {
+        window.clearTimeout(this.selTipDebounce);
+        this.selTipDebounce = 0;
         this.selTipDismiss?.();
         this.selTipDismiss = null;
         this.selTip?.remove();
@@ -402,20 +446,9 @@ export class Xterm {
             if (isMacCopy || isCtrlShiftCopy) {
                 const sel = terminal.getSelection();
                 if (sel) {
-                    void (
-                        navigator.clipboard
-                            ? navigator.clipboard.writeText(sel)
-                            : Promise.reject(new Error('no clipboard'))
-                    )
+                    void this.doCopy(sel)
                         .then(() => this.overlayAddon?.showOverlay('✂', 300))
-                        .catch(() => {
-                            try {
-                                document.execCommand('copy');
-                                this.overlayAddon?.showOverlay('✂', 300);
-                            } catch {
-                                // ignore
-                            }
-                        });
+                        .catch(e => console.warn('[ttyd] copy failed', e));
                     return false;
                 }
                 // No selection on Mac: suppress Cmd+C so it doesn't emit meta+c escape.
@@ -487,22 +520,15 @@ export class Xterm {
                 }
             },
             copySelection: async () => {
-                const sel = terminal.getSelection();
+                // Use last known selection so copy still works if terminal
+                // output arrived after the selection was made.
+                const sel = terminal.getSelection() || this.lastSel;
                 if (!sel) return;
                 try {
-                    if (navigator.clipboard) {
-                        await navigator.clipboard.writeText(sel);
-                    } else {
-                        document.execCommand('copy');
-                    }
+                    await this.doCopy(sel);
                     this.overlayAddon?.showOverlay('✂', 300);
-                } catch {
-                    try {
-                        document.execCommand('copy');
-                        this.overlayAddon?.showOverlay('✂', 300);
-                    } catch (e2) {
-                        console.warn('[ttyd] copy failed', e2);
-                    }
+                } catch (e) {
+                    console.warn('[ttyd] copy failed', e);
                 }
             },
             focus: () => terminal.focus(),
@@ -581,9 +607,11 @@ export class Xterm {
             terminal.onSelectionChange(() => {
                 const sel = this.terminal.getSelection();
                 if (!sel) {
+                    this.lastSel = '';
                     this.hideSelTip();
                     return;
                 }
+                this.lastSel = sel;
                 const lines = sel.split('\n').length;
                 this.overlayAddon?.showOverlay(`${sel.length}c/${lines}L \u2702`, 1200);
                 this.showSelTip(sel);
