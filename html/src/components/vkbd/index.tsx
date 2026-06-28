@@ -24,6 +24,7 @@ interface State {
     settings: Settings;
     settingsOpen: boolean;
     historyOpen: boolean;
+    selectMode: boolean;
 }
 
 const MIN_WIDTH = 260;
@@ -82,6 +83,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             settings: loadSettings(),
             settingsOpen: false,
             historyOpen: false,
+            selectMode: false,
         };
     }
 
@@ -344,6 +346,15 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
     };
 
     private fireKey = (k: KeyDef) => {
+        // Select mode is a vkbd-owned toggle (so the button can show on/off)
+        // that flips the terminal's touch-selection handler. Handle it before
+        // the generic dispatch path, which has no toggle state of its own.
+        if (k.action.type === 'selectmode') {
+            const next = !this.state.selectMode;
+            this.setState({ selectMode: next });
+            window.ttyd?.setSelectMode?.(next);
+            return;
+        }
         const coarse = isCoarse();
         // Record whether xterm's helper textarea was already focused (i.e.
         // the OS keyboard was already showing). If yes, leave it alone so
@@ -587,6 +598,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
     }
 
     private isActive(k: KeyDef): boolean {
+        if (k.action.type === 'selectmode') return this.state.selectMode;
         if (k.action.type !== 'mod') return false;
         return this.state.mods[k.action.mod];
     }

@@ -167,6 +167,10 @@ export function dispatch(action: KeyAction, d: Dispatcher): boolean {
         case 'copy':
             void bridge.copySelection();
             return false;
+        case 'selectmode':
+            // Toggling/active-state is owned by the vkbd component (fireKey
+            // intercepts this action so it can reflect on/off on the button).
+            return false;
         case 'hide':
             d.hideKeyboard();
             return false;

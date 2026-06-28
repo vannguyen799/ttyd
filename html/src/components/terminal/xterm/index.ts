@@ -31,6 +31,7 @@ export interface TtydBridge {
     scrollToBottom: () => void;
     paste: () => Promise<void>;
     copySelection: () => Promise<void>;
+    setSelectMode: (on: boolean) => void;
     focus: () => void;
     vkbdHook?: VirtualModHook;
 }
@@ -132,6 +133,17 @@ export class Xterm {
     private selTipDismiss: (() => void) | null = null;
     private selTipDebounce = 0;
     private lastSel = '';
+
+    // Touch "select mode" (mobile): xterm builds selections from mouse drags,
+    // which never happen on a touchscreen. When on, each terminal tap is
+    // turned into a synthetic mouse gesture — first tap = drag start (cell
+    // anchor), second tap = drag end — so xterm's own selection logic runs
+    // and the copy tooltip appears. Stays on until toggled off.
+    private selectMode = false;
+    private selStage: 0 | 1 = 0;
+    private selAnchorPt: { x: number; y: number } | null = null;
+    private selBanner: HTMLDivElement | null = null;
+    private onSelectPointer: ((e: PointerEvent) => void) | null = null;
 
     constructor(
         private options: XtermOptions,
@@ -288,6 +300,112 @@ export class Xterm {
         this.selTipDismiss = null;
         this.selTip?.remove();
         this.selTip = null;
+    }
+
+    // ── Touch select mode ────────────────────────────────────────────────
+    private setSelectMode(on: boolean) {
+        if (on === this.selectMode) return;
+        this.selectMode = on;
+        if (on) this.enterSelectMode();
+        else this.exitSelectMode();
+    }
+
+    private enterSelectMode() {
+        const el = this.terminal?.element;
+        if (!el) {
+            this.selectMode = false;
+            return;
+        }
+        this.selStage = 0;
+        this.selAnchorPt = null;
+        this.terminal?.clearSelection();
+        this.hideSelTip();
+        // Capture-phase so the tap never reaches xterm's own pointerdown
+        // (which would focus the helper textarea and pop the OS keyboard).
+        this.onSelectPointer = (e: PointerEvent) => this.handleSelectTap(e);
+        el.addEventListener('pointerdown', this.onSelectPointer, true);
+        this.showSelBanner('✂ Tap selection start');
+    }
+
+    private exitSelectMode() {
+        const el = this.terminal?.element;
+        if (el && this.onSelectPointer) el.removeEventListener('pointerdown', this.onSelectPointer, true);
+        this.onSelectPointer = null;
+        // Release any half-finished drag so xterm's document listeners detach.
+        if (this.selStage === 1 && this.selAnchorPt) {
+            this.synthMouse('mouseup', this.selAnchorPt.x, this.selAnchorPt.y, document);
+        }
+        this.selStage = 0;
+        this.selAnchorPt = null;
+        this.hideSelBanner();
+    }
+
+    private handleSelectTap(e: PointerEvent) {
+        if (!e.isTrusted) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const el = this.terminal?.element;
+        if (!el) return;
+        const x = e.clientX;
+        const y = e.clientY;
+        if (this.selStage === 0) {
+            // First tap: start a drag at the tapped cell (no mouseup yet, so
+            // xterm stays in "dragging" state until the second tap).
+            this.terminal?.clearSelection();
+            this.synthMouse('mousedown', x, y, el);
+            this.selAnchorPt = { x, y };
+            this.selStage = 1;
+            this.showSelBanner('✂ Tap selection end');
+        } else {
+            // Second tap: extend to here and release — onSelectionChange then
+            // fires and the copy tooltip appears.
+            this.synthMouse('mousemove', x, y, document);
+            this.synthMouse('mouseup', x, y, document);
+            this.selStage = 0;
+            this.selAnchorPt = null;
+            this.showSelBanner('✂ Tap selection start');
+        }
+        // xterm's own capture pointerdown handler runs before ours and flips
+        // the helper textarea to inputmode=text; undo that so the tap doesn't
+        // pop the OS keyboard while the user is selecting.
+        const ta = el.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
+        if (ta) {
+            ta.inputMode = 'none';
+            ta.blur();
+        }
+    }
+
+    private synthMouse(type: 'mousedown' | 'mousemove' | 'mouseup', x: number, y: number, target: EventTarget) {
+        target.dispatchEvent(
+            new MouseEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+                clientX: x,
+                clientY: y,
+                screenX: x,
+                screenY: y,
+                button: 0,
+                buttons: type === 'mouseup' ? 0 : 1,
+                // xterm's selection mousedown only starts on detail===1.
+                detail: type === 'mousedown' ? 1 : 0,
+            })
+        );
+    }
+
+    private showSelBanner(text: string) {
+        if (!this.selBanner) {
+            const b = document.createElement('div');
+            b.className = 'ttyd-sel-mode-banner';
+            document.body.appendChild(b);
+            this.selBanner = b;
+        }
+        this.selBanner.textContent = text;
+    }
+
+    private hideSelBanner() {
+        this.selBanner?.remove();
+        this.selBanner = null;
     }
 
     @bind
@@ -531,6 +649,7 @@ export class Xterm {
                     console.warn('[ttyd] copy failed', e);
                 }
             },
+            setSelectMode: on => this.setSelectMode(on),
             focus: () => terminal.focus(),
             vkbdHook: prevHook,
         };

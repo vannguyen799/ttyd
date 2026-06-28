@@ -43,6 +43,10 @@ export type KeyAction =
     | { type: 'scroll'; by: ScrollUnit; dir?: -1 | 1; amount?: number }
     | { type: 'paste' }
     | { type: 'copy' }
+    // Toggle touch "select mode": with no mouse on a phone xterm can't make
+    // a selection, so this turns each terminal tap into a selection gesture
+    // (tap start cell, tap end cell). Stays on until toggled off.
+    | { type: 'selectmode' }
     | { type: 'hide' };
 
 export interface KeyDef {

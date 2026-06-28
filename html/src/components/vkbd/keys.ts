@@ -93,6 +93,7 @@ export const GROUPS: KeyGroup[] = [
                     { label: '^A', sub: 'bol', action: { type: 'send', bytes: '\x01' } },
                     { label: '^E', sub: 'eol', action: { type: 'send', bytes: '\x05' } },
                     { label: '^K', sub: 'kill', action: { type: 'send', bytes: '\x0b' } },
+                    { label: 'Select', sub: 'tap×2', action: { type: 'selectmode' }, class: 'mod' },
                     { label: 'Copy', sub: '^⇧C', action: { type: 'copy' } },
                     { label: 'Paste', sub: '^⇧V', action: { type: 'paste' } },
                     { label: 'F1', action: { type: 'named', key: 'f1' } },
