@@ -485,6 +485,12 @@ export class Xterm {
         try {
             const ta = terminal.element?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null;
             const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
+            // Android-only: the Gboard char-drop workaround below must not run
+            // on iOS. WebKit ignores preventDefault() on `beforeinput` at
+            // word-commit boundaries (i.e. the spacebar), so intercepting +
+            // re-sending there delivers the char once to the PTY AND lets the
+            // textarea mutate — xterm then sends it again, doubling every space.
+            const isAndroid = /Android/i.test(navigator.userAgent || '');
             if (ta) {
                 ta.addEventListener('beforeinput', (event: InputEvent) => {
                     if (event.inputType !== 'insertText' && event.inputType !== 'insertCompositionText') return;
@@ -514,8 +520,9 @@ export class Xterm {
                     // never changes — xterm therefore can't double-send.
                     // Composition input (event.isComposing / Vietnamese Telex,
                     // CJK) is left untouched so diacritic/IME composition keeps
-                    // working through xterm's normal path.
-                    if (coarse && event.inputType === 'insertText' && !event.isComposing && data) {
+                    // working through xterm's normal path. Gated to Android only
+                    // because iOS ignores preventDefault here and double-sends.
+                    if (isAndroid && event.inputType === 'insertText' && !event.isComposing && data) {
                         event.preventDefault();
                         this.sendData(data);
                     }
