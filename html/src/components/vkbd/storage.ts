@@ -44,6 +44,17 @@ function defaultVisible(): boolean {
     return isCoarse();
 }
 
+// On desktop (fine pointer) a physical keyboard already covers these
+// groups, so seed them disabled and show only the value-add macro groups
+// (Claude/Codex/tmux) when the bar is opened. Touch devices get every
+// group. This only seeds the initial disabledGroups — users can re-enable
+// any of them from settings, and a stored config overrides this entirely.
+const DESKTOP_REDUNDANT_GROUPS = ['keys', 'edit', 'readline', 'fn'];
+
+function defaultDisabledGroups(): string[] {
+    return isCoarse() ? [] : DESKTOP_REDUNDANT_GROUPS.slice();
+}
+
 function defaultFloating(): { pos: { x: number; y: number }; width: number } {
     try {
         const w = Math.min(window.innerWidth - 24, 520);
@@ -56,11 +67,10 @@ function defaultFloating(): { pos: { x: number; y: number }; width: number } {
     }
 }
 
-const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width'> = {
+const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width' | 'disabledGroups'> = {
     position: 'bottom',
     opacity: 0.92,
     disabledIds: [],
-    disabledGroups: [],
     custom: [],
     keyHeight: null,
     scrollStep: 5,
@@ -83,6 +93,7 @@ export function loadSettings(): Settings {
     const fd = defaultFloating();
     const base: Settings = {
         ...DEFAULTS_STATIC,
+        disabledGroups: defaultDisabledGroups(),
         visible: defaultVisible(),
         // Mobile-first default: dock at bottom (split screen with terminal).
         // Desktop default: float in center-bottom.
