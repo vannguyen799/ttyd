@@ -186,16 +186,16 @@ export const GROUPS: KeyGroup[] = [
             {
                 keys: [
                     {
-                        // Scroll the current pane back to the bottom (latest output).
-                        // Uses tmux's scroll-to-bottom command via the command prompt,
-                        // same pattern as kill-pane above. Equivalent to Ctrl+End in
-                        // desktop terminal emulators.
+                        // Jump back to the live bottom from tmux scrollback. Sends
+                        // C-e, which tmux-persist.conf binds in the copy-mode tables
+                        // to `-X cancel` (exit copy-mode → latest output). Must not
+                        // use a prefix key: this is pressed *while in copy-mode*, where
+                        // the prefix (C-b) is page-up, not a prefix. Outside copy-mode
+                        // C-e is a harmless shell end-of-line. ('scroll-to-bottom' used
+                        // before is not a real tmux command, so the button did nothing.)
                         label: '⏷ Last',
                         sub: 'Ctrl+End',
-                        action: {
-                            type: 'seq',
-                            steps: [{ bytes: TMUX + ':' }, { bytes: 'scroll-to-bottom\r', delay: 80 }],
-                        },
+                        action: { type: 'send', bytes: '\x05' },
                         class: 'tmux',
                     },
                     {
@@ -251,16 +251,15 @@ export const GROUPS: KeyGroup[] = [
                         repeat: true,
                     },
                     {
-                        // Emit the current tmux copy-buffer as an OSC 52 sequence.
-                        // xterm's ClipboardAddon intercepts OSC 52 and writes the
-                        // payload to the system clipboard — no clipboard-write
-                        // permission required. Works even on HTTP/Safari.
+                        // Push the current tmux copy-buffer to the system clipboard.
+                        // Sends prefix+C-y, which tmux-persist.conf binds to
+                        // `load-buffer -w` → an OSC 52 sequence that xterm's
+                        // ClipboardAddon writes to the clipboard. Driven through tmux
+                        // (not typed at a shell prompt) so it works inside TUI apps
+                        // like Claude, unlike the old `printf '\e]52…'` command.
                         label: 'buf→clip',
                         sub: 'tmux buf',
-                        action: {
-                            type: 'send',
-                            bytes: "printf '\\e]52;c;%s\\a' \"$(tmux show-buffer 2>/dev/null | base64 | tr -d '\\n')\"\r",
-                        },
+                        action: { type: 'send', bytes: TMUX + '\x19' },
                         class: 'tmux',
                     },
                 ],
