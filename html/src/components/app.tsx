@@ -15,7 +15,10 @@ const isMobile = typeof window !== 'undefined' && window.matchMedia && window.ma
 const savedVkbd = loadSettings();
 const clientOptions = {
     rendererType: isMobile ? 'dom' : 'webgl',
-    disableLeaveAlert: false,
+    // No "Leave site? changes may not be saved" prompt on tab close: the
+    // session lives in tmux (start-ttyd.sh) and survives disconnect, so the
+    // warning is misleading — closing the tab loses nothing.
+    disableLeaveAlert: true,
     disableResizeOverlay: false,
     enableZmodem: false,
     enableTrzsz: false,
