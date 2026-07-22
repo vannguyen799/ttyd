@@ -7,8 +7,47 @@ const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const devMode = process.env.NODE_ENV !== 'production';
+
+// Cap on an accepted paste. Screenshots are far below this; the limit exists
+// because this handler sits on the single public port.
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+
+// Load an image into the X clipboard of the headless display started by
+// ttyd/scripts/start-clipboard-x.sh, so Claude Code's Ctrl+V finds it:
+//
+//   xclip -selection clipboard -t TARGETS -o | grep image/png   → detect
+//   xclip -selection clipboard -t image/png -o > tmpfile        → read
+//
+// Two subtleties drive the shape of this function:
+//  1. X selections have no storage — the *owning process* serves each request
+//     on demand. xclip therefore forks and must outlive this HTTP request, so
+//     it is detached and unref'd. Ownership transfer reaps it when the next
+//     image arrives.
+//  2. Piping via stdin (rather than a temp file) means nothing touches disk,
+//     so there is no leaked file to clean up if the process dies mid-paste.
+function setClipboardImage(buf) {
+    return new Promise((resolve, reject) => {
+        const display = process.env.TTYD_CLIP_DISPLAY || ':77';
+        const child = spawn('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-i'], {
+            env: { ...process.env, DISPLAY: display },
+            detached: true,
+            stdio: ['pipe', 'ignore', 'ignore'],
+        });
+        child.on('error', err =>
+            reject(new Error(err.code === 'ENOENT' ? 'xclip not installed' : err.message))
+        );
+        child.stdin.on('error', err => reject(new Error(`xclip stdin: ${err.message}`)));
+        // xclip reads to EOF, claims the selection, then forks into the
+        // background — so ending stdin is what actually arms the clipboard.
+        child.stdin.end(buf, () => {
+            child.unref();
+            resolve();
+        });
+    });
+}
 
 // ttyd Basic Auth credential, base64("user:pass") — the same value ttyd's
 // /token endpoint returns and what its check_auth() compares against. Read
@@ -117,6 +156,53 @@ const devConfig = {
                 },
             },
         ],
+        setupMiddlewares: (middlewares, devServer) => {
+            // Image paste bridge. The browser can't reach the host clipboard,
+            // so the UI POSTs the pasted image here and we load it into the
+            // headless X clipboard; the client then sends Ctrl+V to the PTY
+            // and Claude Code picks it up as a native [Image #N].
+            devServer.app.post('/clipboard-image', (req, res) => {
+                // Same gate as the terminal: ttyd's /token hands the browser
+                // base64("user:pass") and the client replays it verbatim (see
+                // refreshToken() in xterm/index.ts). No credential file means
+                // ttyd runs --no-auth, so the open port is intentional.
+                const cred = readTtydCredential();
+                if (cred && req.headers.authorization !== `Basic ${cred}`) {
+                    res.set('WWW-Authenticate', 'Basic realm="ttyd"');
+                    res.status(401).json({ error: 'unauthorized' });
+                    return;
+                }
+
+                const chunks = [];
+                let size = 0;
+                let aborted = false;
+                req.on('data', chunk => {
+                    if (aborted) return;
+                    size += chunk.length;
+                    if (size > MAX_IMAGE_BYTES) {
+                        aborted = true;
+                        res.status(413).json({ error: 'image too large' });
+                        req.destroy();
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
+                req.on('end', () => {
+                    if (aborted) return;
+                    if (size === 0) {
+                        res.status(400).json({ error: 'empty body' });
+                        return;
+                    }
+                    setClipboardImage(Buffer.concat(chunks))
+                        .then(() => res.json({ ok: true }))
+                        .catch(err => {
+                            console.error('[ttyd] clipboard-image failed:', err.message);
+                            res.status(500).json({ error: err.message });
+                        });
+                });
+            });
+            return middlewares;
+        },
         webSocketServer: {
             type: 'sockjs',
             options: {

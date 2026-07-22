@@ -2,7 +2,8 @@ import { bind } from 'decko';
 import type { IDisposable, ITerminalOptions } from '@xterm/xterm';
 import { Terminal } from '@xterm/xterm';
 import { CanvasAddon } from '@xterm/addon-canvas';
-import { ClipboardAddon } from '@xterm/addon-clipboard';
+import { Base64, ClipboardAddon } from '@xterm/addon-clipboard';
+import type { ClipboardSelectionType, IBase64, IClipboardProvider } from '@xterm/addon-clipboard';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -30,10 +31,52 @@ export interface TtydBridge {
     scrollPages: (n: number) => void;
     scrollToBottom: () => void;
     paste: () => Promise<void>;
+    pasteImage: (file: Blob) => Promise<void>;
     copySelection: () => Promise<void>;
     setSelectMode: (on: boolean) => void;
     focus: () => void;
     vkbdHook?: VirtualModHook;
+}
+
+// Claude's vision pipeline downscales above ~1568px anyway, so shrinking here
+// costs no fidelity and keeps a phone-camera paste from shipping 8 MB over a
+// mobile link.
+const MAX_IMAGE_DIM = 1568;
+
+// ClipboardAddon 0.1.0 ships typings that disagree with its build: the .d.ts
+// declares `constructor(provider?)` while the shipped JS is
+// `constructor(base64 = Base64, provider = BrowserClipboardProvider)`. Passing
+// a provider as the first argument therefore installs it as the *base64 codec*
+// and silently keeps the default provider. Construct through this signature so
+// the provider lands in the slot the runtime actually reads.
+const ClipboardAddonCtor = ClipboardAddon as unknown as new (
+    base64: IBase64,
+    provider: IClipboardProvider
+) => ClipboardAddon;
+
+// Normalise any pasted/dropped/picked image to PNG.
+//
+// Doing this in the browser rather than server-side is what keeps the server
+// dependency-free: Claude Code reads the clipboard as `-t image/png` first and
+// only falls back to image/bmp, so advertising a JPEG under an image/png
+// target would hand it mislabelled bytes. Canvas re-encoding guarantees the
+// declared type matches the payload.
+async function toPngBlob(src: Blob): Promise<Blob> {
+    const bitmap = await createImageBitmap(src);
+    try {
+        const scale = Math.min(1, MAX_IMAGE_DIM / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('canvas 2d context unavailable');
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        return await new Promise<Blob>((resolve, reject) =>
+            canvas.toBlob(b => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png')
+        );
+    } finally {
+        bitmap.close();
+    }
 }
 
 declare global {
@@ -106,7 +149,26 @@ export class Xterm {
     private terminal: Terminal;
     private fitAddon = new FitAddon();
     private overlayAddon = new OverlayAddon();
-    private clipboardAddon = new ClipboardAddon();
+    // OSC 52 (the escape tmux emits for `load-buffer -w`) is what carries a
+    // tmux copy-buffer to the browser. The addon's stock provider writes it
+    // with navigator.clipboard.writeText alone, which fails on BOTH of the
+    // paths this UI actually runs on:
+    //   • plain HTTP (the UI is served on 0.0.0.0:10090, not HTTPS) —
+    //     navigator.clipboard is undefined outside a secure context, so the
+    //     stock provider throws inside the OSC handler and the copy vanishes;
+    //   • no user gesture — the escape arrives on the websocket, long after
+    //     the tap that triggered it, and Safari/Firefox reject clipboard
+    //     writes that aren't inside a trusted event.
+    // Route it through doCopy instead, which degrades HTTPS → execCommand →
+    // an explicit "tap to copy" sheet, so the text always reaches the user.
+    private clipboardAddon = new ClipboardAddonCtor(new Base64(), {
+        readText: (sel: ClipboardSelectionType) =>
+            sel === ('c' as ClipboardSelectionType) && navigator.clipboard?.readText
+                ? navigator.clipboard.readText().catch(() => '')
+                : Promise.resolve(''),
+        writeText: (sel: ClipboardSelectionType, text: string) =>
+            sel === ('c' as ClipboardSelectionType) ? this.doCopy(text) : Promise.resolve(),
+    });
     private webLinksAddon = new WebLinksAddon();
     private webglAddon?: WebglAddon;
     private canvasAddon?: CanvasAddon;
@@ -131,6 +193,7 @@ export class Xterm {
 
     private selTip: HTMLDivElement | null = null;
     private selTipDismiss: (() => void) | null = null;
+    private copySheet: HTMLDivElement | null = null;
     private selTipDebounce = 0;
     private lastSel = '';
 
@@ -189,37 +252,148 @@ export class Xterm {
             this.fitRaf = 0;
         }
         this.hideSelTip();
+        this.hideCopySheet();
         for (const d of this.disposables) {
             d.dispose();
         }
         this.disposables.length = 0;
     }
 
-    // Copy text to clipboard: modern API first, textarea-execCommand fallback
-    // for HTTP contexts where navigator.clipboard is unavailable.
-    // Must be called within a user-gesture handler (click/keydown).
-    private doCopy(text: string): Promise<void> {
-        if (!text) return Promise.resolve();
+    // Copy text to the system clipboard, degrading through every mechanism the
+    // browser might still allow. Never rejects: the last tier hands the text to
+    // the user instead of failing silently.
+    //
+    //   1. navigator.clipboard — needs a secure context (HTTPS or localhost)
+    //      AND, on Safari/Firefox, a live user gesture.
+    //   2. execCommand('copy') — the only tier that works over plain HTTP, but
+    //      still wants user activation.
+    //   3. the copy sheet — shows the text preselected behind one button, so
+    //      the tap that dismisses it *is* the gesture tier 2 was missing.
+    //
+    // Tier 3 is the normal path for clipboard writes that originate server-side
+    // (OSC 52 from tmux) on a plain-HTTP origin, because no gesture is live
+    // when the escape lands. Serving the UI over HTTPS promotes those to tier 1
+    // and makes the copy seamless.
+    private async doCopy(text: string): Promise<void> {
+        if (!text) return;
         if (navigator.clipboard?.writeText) {
-            return navigator.clipboard.writeText(text);
+            try {
+                await navigator.clipboard.writeText(text);
+                return;
+            } catch {
+                // Not a secure context, or no user activation — keep degrading.
+            }
         }
-        return new Promise((res, rej) => {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;';
-            document.body.appendChild(ta);
+        if (this.execCommandCopy(text)) return;
+        this.showCopySheet(text);
+    }
+
+    private execCommandCopy(text: string): boolean {
+        const active = document.activeElement as HTMLElement | null;
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        // readOnly keeps iOS from raising the on-screen keyboard for the
+        // split second the textarea holds focus.
+        ta.readOnly = true;
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;opacity:0;';
+        document.body.appendChild(ta);
+        let ok = false;
+        try {
             ta.focus({ preventScroll: true });
-            ta.select();
-            const ok = (() => {
-                try {
-                    return document.execCommand('copy');
-                } catch {
-                    return false;
-                }
-            })();
-            document.body.removeChild(ta);
-            ok ? res() : rej(new Error('copy failed'));
+            // select() alone is a no-op on iOS Safari for readOnly fields.
+            ta.setSelectionRange(0, ta.value.length);
+            ok = document.execCommand('copy');
+        } catch {
+            ok = false;
+        }
+        ta.remove();
+        // Hand focus back, or the terminal stops receiving keystrokes after a copy.
+        const helper = this.terminal?.element?.querySelector('.xterm-helper-textarea') as HTMLElement | null;
+        (active ?? helper)?.focus?.({ preventScroll: true });
+        return ok;
+    }
+
+    // Last-resort copy UI: the text sits preselected in a textarea behind a
+    // Copy button. Pressing it retries the copy inside a genuine user gesture,
+    // which is exactly what the earlier tiers lacked; long-press → Copy still
+    // works as a manual escape hatch if even that is blocked.
+    private showCopySheet(text: string) {
+        this.hideCopySheet();
+
+        const wrap = document.createElement('div');
+        wrap.className = 'ttyd-copy-sheet';
+
+        const box = document.createElement('div');
+        box.className = 'ttyd-copy-sheet-box';
+
+        const label = document.createElement('div');
+        label.className = 'ttyd-copy-sheet-label';
+        label.textContent = 'Tap Copy to put this on your clipboard';
+
+        const ta = document.createElement('textarea');
+        ta.className = 'ttyd-copy-sheet-text';
+        ta.value = text;
+        ta.readOnly = true;
+        ta.spellcheck = false;
+
+        const row = document.createElement('div');
+        row.className = 'ttyd-copy-sheet-row';
+
+        const copy = document.createElement('button');
+        copy.className = 'ttyd-copy-sheet-btn primary';
+        copy.textContent = '⎘ Copy';
+        copy.addEventListener('click', () => {
+            ta.focus({ preventScroll: true });
+            ta.setSelectionRange(0, ta.value.length);
+            let ok = false;
+            try {
+                ok = document.execCommand('copy');
+            } catch {
+                ok = false;
+            }
+            if (!ok && navigator.clipboard?.writeText) {
+                void navigator.clipboard
+                    .writeText(text)
+                    .then(() => {
+                        this.hideCopySheet();
+                        this.overlayAddon?.showOverlay('✂', 300);
+                    })
+                    .catch(() => {
+                        // Leave the sheet open so the text can still be
+                        // selected by hand rather than lost.
+                        label.textContent = 'Blocked by the browser — select the text and copy manually';
+                    });
+                return;
+            }
+            if (ok) {
+                this.hideCopySheet();
+                this.overlayAddon?.showOverlay('✂', 300);
+            } else {
+                label.textContent = 'Blocked by the browser — select the text and copy manually';
+            }
         });
+
+        const close = document.createElement('button');
+        close.className = 'ttyd-copy-sheet-btn';
+        close.textContent = 'Close';
+        close.addEventListener('click', () => this.hideCopySheet());
+
+        row.append(copy, close);
+        box.append(label, ta, row);
+        wrap.appendChild(box);
+        // Backdrop click dismisses; clicks inside the box must not.
+        box.addEventListener('pointerdown', e => e.stopPropagation());
+        wrap.addEventListener('pointerdown', () => this.hideCopySheet());
+
+        document.body.appendChild(wrap);
+        this.copySheet = wrap;
+        ta.setSelectionRange(0, ta.value.length);
+    }
+
+    private hideCopySheet() {
+        this.copySheet?.remove();
+        this.copySheet = null;
+        this.terminal?.focus();
     }
 
     private showSelTip(sel: string) {
@@ -417,6 +591,42 @@ export class Xterm {
     @bind
     public sendFile(files: FileList) {
         this.zmodemAddon?.sendFile(files);
+    }
+
+    // Paste an image into whatever TUI is in the foreground.
+    //
+    // Rather than writing the image to disk and typing its path, this loads it
+    // into the host's X clipboard and then sends a real Ctrl+V, so Claude Code
+    // runs its own paste path and renders a native [Image #N] chip. It reads
+    // the clipboard with `xclip -selection clipboard -t image/png -o`, which
+    // is exactly what /clipboard-image arms. The path-typing alternative only
+    // works for tools that happen to read file paths, and loses the chip.
+    @bind
+    public async pasteImage(src: Blob) {
+        const { overlayAddon } = this;
+        try {
+            overlayAddon?.showOverlay('🖼 …', 2000);
+            const png = await toPngBlob(src);
+            const resp = await fetch('/clipboard-image', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'image/png',
+                    // Same credential the WS handshake uses — ttyd's /token
+                    // returns base64("user:pass"); see refreshToken() above.
+                    ...(this.token ? { Authorization: `Basic ${this.token}` } : {}),
+                },
+                body: png,
+            });
+            if (!resp.ok) {
+                const detail = await resp.json().catch(() => ({}));
+                throw new Error(detail.error || `HTTP ${resp.status}`);
+            }
+            this.sendData('\x16'); // Ctrl+V
+            overlayAddon?.showOverlay('🖼 pasted', 600);
+        } catch (e) {
+            console.warn('[ttyd] image paste failed', e);
+            overlayAddon?.showOverlay(`🖼 ${(e as Error).message}`, 2500);
+        }
     }
 
     @bind
@@ -622,9 +832,53 @@ export class Xterm {
             );
         };
 
+        // Image paste and drag-drop.
+        //
+        // Reads ClipboardEvent.clipboardData rather than navigator.clipboard
+        // .read(): the async Clipboard API requires a secure context, and this
+        // UI is routinely served over plain HTTP on a LAN IP, where it simply
+        // isn't available. The paste event carries the same bytes with no
+        // permission prompt, and also covers mobile long-press-paste.
+        const imageFrom = (dt: DataTransfer | null | undefined): File | null => {
+            for (const item of Array.from(dt?.items ?? [])) {
+                if (item.kind === 'file' && item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) return file;
+                }
+            }
+            return null;
+        };
+        const onPaste = (e: ClipboardEvent) => {
+            const img = imageFrom(e.clipboardData);
+            if (!img) return; // text paste — leave xterm's own handling alone
+            e.preventDefault();
+            void this.pasteImage(img);
+        };
+        const onDrop = (e: DragEvent) => {
+            const img = imageFrom(e.dataTransfer);
+            if (!img) return;
+            e.preventDefault();
+            void this.pasteImage(img);
+        };
+        // Without cancelling dragover the browser navigates away to the file.
+        const onDragOver = (e: DragEvent) => {
+            if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+        };
+        document.addEventListener('paste', onPaste);
+        document.addEventListener('drop', onDrop);
+        document.addEventListener('dragover', onDragOver);
+        this.register({
+            dispose: () => {
+                document.removeEventListener('paste', onPaste);
+                document.removeEventListener('drop', onDrop);
+                document.removeEventListener('dragover', onDragOver);
+            },
+        });
+
         const prevHook = window.ttyd?.vkbdHook;
         window.ttyd = {
             sendBytes: data => this.sendData(data),
+            pasteImage: blob => this.pasteImage(blob),
             scrollLines: n => dispatchWheel(n * getRowHeight()),
             scrollPages: n => {
                 const vp = getViewport();

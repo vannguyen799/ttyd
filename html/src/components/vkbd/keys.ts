@@ -96,6 +96,7 @@ export const GROUPS: KeyGroup[] = [
                     { label: 'Select', sub: 'tap×2', action: { type: 'selectmode' }, class: 'mod' },
                     { label: 'Copy', sub: '^⇧C', action: { type: 'copy' } },
                     { label: 'Paste', sub: '^⇧V', action: { type: 'paste' } },
+                    { label: '🖼', sub: 'image', action: { type: 'pasteimage' } },
                     { label: 'F1', action: { type: 'named', key: 'f1' } },
                     { label: 'F2', action: { type: 'named', key: 'f2' } },
                 ],
@@ -186,16 +187,47 @@ export const GROUPS: KeyGroup[] = [
             {
                 keys: [
                     {
-                        // Jump back to the live bottom from tmux scrollback. Sends
-                        // C-e, which tmux-persist.conf binds in the copy-mode tables
-                        // to `-X cancel` (exit copy-mode → latest output). Must not
-                        // use a prefix key: this is pressed *while in copy-mode*, where
-                        // the prefix (C-b) is page-up, not a prefix. Outside copy-mode
-                        // C-e is a harmless shell end-of-line. ('scroll-to-bottom' used
-                        // before is not a real tmux command, so the button did nothing.)
+                        // tmux-side scrollback. The generic ▲/▼ Scroll keys in the
+                        // "fn" group synthesize a wheel event, which is right for a
+                        // bare shell but useless here: once the foreground app turns
+                        // on mouse reporting (Claude Code, vim, htop) tmux hands the
+                        // wheel to the app and the pane never enters copy-mode. These
+                        // go through the prefix, which tmux claims first regardless —
+                        // see the C-p/C-n bindings in tmux-persist.conf.
+                        label: '▲ tmux',
+                        sub: 'scroll',
+                        action: { type: 'send', bytes: TMUX + '\x10' },
+                        class: 'tmux',
+                        repeat: true,
+                    },
+                    {
+                        label: '▼ tmux',
+                        sub: 'scroll',
+                        action: { type: 'send', bytes: TMUX + '\x0e' },
+                        class: 'tmux',
+                        repeat: true,
+                    },
+                    {
+                        // Jump back to the live bottom. Goes through the prefix
+                        // (→ `if-shell '#{pane_in_mode}' 'send-keys -X cancel'`)
+                        // rather than the bare C-e it sent before: a TUI with mouse
+                        // reporting on swallowed that C-e as a plain end-of-line, so
+                        // the button silently did nothing in exactly the app people
+                        // use it in. The binding is a no-op outside copy-mode, so
+                        // pressing it any time is safe.
                         label: '⏷ Last',
-                        sub: 'Ctrl+End',
-                        action: { type: 'send', bytes: '\x05' },
+                        sub: 'to bottom',
+                        action: { type: 'send', bytes: TMUX + '\x05' },
+                        class: 'tmux',
+                    },
+                    {
+                        // Copy recent output straight to the clipboard with no
+                        // selection step — `capture-pane | load-buffer -w` → OSC 52.
+                        // Selecting text by hand is painful on a phone, and this is
+                        // the case people actually want ("give me what just printed").
+                        label: '⧉ Screen',
+                        sub: '→ clip',
+                        action: { type: 'send', bytes: TMUX + '\x17' },
                         class: 'tmux',
                     },
                     {

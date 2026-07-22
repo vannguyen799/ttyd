@@ -127,6 +127,31 @@ export interface Dispatcher {
     hideKeyboard: () => void;
 }
 
+// Open the OS image picker (gallery or camera on mobile), resolving with the
+// chosen file or null if dismissed.
+//
+// The input is mounted rather than detached because iOS Safari ignores
+// click() on a node that isn't in the document, and it's kept visible-but-
+// transparent because `display: none` suppresses the tap there as well.
+function pickImage(): Promise<File | null> {
+    return new Promise(resolve => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.style.cssText = 'position:fixed;left:-9999px;opacity:0;';
+        const done = (file: File | null) => {
+            input.remove();
+            resolve(file);
+        };
+        input.addEventListener('change', () => done(input.files?.[0] ?? null));
+        // Not supported everywhere; without it a dismissed picker leaves the
+        // hidden input parked until the next pick.
+        (input as EventTarget).addEventListener('cancel', () => done(null));
+        document.body.appendChild(input);
+        input.click();
+    });
+}
+
 export function dispatch(action: KeyAction, d: Dispatcher): boolean {
     const bridge = window.ttyd;
     if (!bridge && action.type !== 'mod' && action.type !== 'hide') return false;
@@ -163,6 +188,13 @@ export function dispatch(action: KeyAction, d: Dispatcher): boolean {
         }
         case 'paste':
             void bridge.paste();
+            return true;
+        case 'pasteimage':
+            pickImage()
+                .then(file => {
+                    if (file) void bridge.pasteImage(file);
+                })
+                .catch(e => console.warn('[ttyd] image pick failed', e));
             return true;
         case 'copy':
             void bridge.copySelection();

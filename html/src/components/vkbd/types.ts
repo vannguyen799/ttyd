@@ -42,6 +42,10 @@ export type KeyAction =
     | { type: 'named'; key: NamedKey }
     | { type: 'scroll'; by: ScrollUnit; dir?: -1 | 1; amount?: number }
     | { type: 'paste' }
+    // Pick an image and paste it into the foreground TUI. Phones have no
+    // Ctrl+V and their clipboard rarely survives an app switch, so this opens
+    // the native photo picker/camera instead of reading the clipboard.
+    | { type: 'pasteimage' }
     | { type: 'copy' }
     // Toggle touch "select mode": with no mouse on a phone xterm can't make
     // a selection, so this turns each terminal tap into a selection gesture

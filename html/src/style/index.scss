@@ -52,6 +52,88 @@
     }
 }
 
+// Last-resort copy sheet. Shown when the browser refuses a programmatic
+// clipboard write — over plain HTTP, or when the text arrives from the server
+// (OSC 52) with no user gesture live. The Copy button supplies that gesture.
+.ttyd-copy-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+
+    .ttyd-copy-sheet-box {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+        max-width: 520px;
+        padding: 14px;
+        background: rgba(24, 24, 24, 0.98);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 10px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    }
+
+    .ttyd-copy-sheet-label {
+        color: rgba(255, 255, 255, 0.72);
+        font-family: system-ui, sans-serif;
+        font-size: 12.5px;
+        line-height: 1.35;
+    }
+
+    .ttyd-copy-sheet-text {
+        width: 100%;
+        min-height: 120px;
+        max-height: 45vh;
+        padding: 8px;
+        resize: vertical;
+        background: #111;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 6px;
+        color: #bfbdb6;
+        font-family: monospace;
+        // 16px keeps iOS Safari from zooming the viewport on focus.
+        font-size: 16px;
+        line-height: 1.4;
+        white-space: pre;
+        overflow: auto;
+    }
+
+    .ttyd-copy-sheet-row {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .ttyd-copy-sheet-btn {
+        padding: 7px 16px;
+        background: rgba(255, 255, 255, 0.11);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 6px;
+        color: #fff;
+        font-family: system-ui, sans-serif;
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.12s;
+
+        &.primary {
+            background: rgba(89, 194, 255, 0.22);
+            border-color: rgba(89, 194, 255, 0.5);
+        }
+        &:hover {
+            background: rgba(255, 255, 255, 0.22);
+        }
+        &:active {
+            background: rgba(255, 255, 255, 0.32);
+        }
+    }
+}
+
 // Touch select-mode banner — a fixed top-center hint shown while select mode
 // is on, telling the user to tap the start then end cell.
 .ttyd-sel-mode-banner {
