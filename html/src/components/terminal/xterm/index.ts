@@ -54,6 +54,18 @@ const ClipboardAddonCtor = ClipboardAddon as unknown as new (
     provider: IClipboardProvider
 ) => ClipboardAddon;
 
+// Does this OSC 52 selection field mean "the system clipboard"?
+//
+// Must accept the EMPTY string, and that is not a nicety: tmux writes
+// `ESC ] 52 ; ; <base64> BEL` — captured off the wire — leaving the selection
+// field blank, which per the spec means "the default selection" (clipboard).
+// The addon does not normalise it; its handler splits on ';' and hands the raw
+// first field to the provider, so a `sel === 'c'` test is false for every copy
+// tmux sends and the text is dropped without a trace. The stock
+// BrowserClipboardProvider has exactly this bug (`"c" !== t ? resolve()`),
+// which is why OSC 52 copy never worked here regardless of transport.
+const isSystemSel = (sel: ClipboardSelectionType | string): boolean => sel === '' || sel === 'c';
+
 // Normalise any pasted/dropped/picked image to PNG.
 //
 // Doing this in the browser rather than server-side is what keeps the server
@@ -162,12 +174,10 @@ export class Xterm {
     // Route it through doCopy instead, which degrades HTTPS → execCommand →
     // an explicit "tap to copy" sheet, so the text always reaches the user.
     private clipboardAddon = new ClipboardAddonCtor(new Base64(), {
-        readText: (sel: ClipboardSelectionType) =>
-            sel === ('c' as ClipboardSelectionType) && navigator.clipboard?.readText
-                ? navigator.clipboard.readText().catch(() => '')
-                : Promise.resolve(''),
-        writeText: (sel: ClipboardSelectionType, text: string) =>
-            sel === ('c' as ClipboardSelectionType) ? this.doCopy(text) : Promise.resolve(),
+        readText: sel => (isSystemSel(sel) && navigator.clipboard?.readText
+            ? navigator.clipboard.readText().catch(() => '')
+            : Promise.resolve('')),
+        writeText: (sel, text) => (isSystemSel(sel) ? this.doCopy(text) : Promise.resolve()),
     });
     private webLinksAddon = new WebLinksAddon();
     private webglAddon?: WebglAddon;
