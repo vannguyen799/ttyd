@@ -36,9 +36,7 @@ function setClipboardImage(buf) {
             detached: true,
             stdio: ['pipe', 'ignore', 'ignore'],
         });
-        child.on('error', err =>
-            reject(new Error(err.code === 'ENOENT' ? 'xclip not installed' : err.message))
-        );
+        child.on('error', err => reject(new Error(err.code === 'ENOENT' ? 'xclip not installed' : err.message)));
         child.stdin.on('error', err => reject(new Error(`xclip stdin: ${err.message}`)));
         // xclip reads to EOF, claims the selection, then forks into the
         // background — so ending stdin is what actually arms the clipboard.

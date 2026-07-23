@@ -174,9 +174,10 @@ export class Xterm {
     // Route it through doCopy instead, which degrades HTTPS → execCommand →
     // an explicit "tap to copy" sheet, so the text always reaches the user.
     private clipboardAddon = new ClipboardAddonCtor(new Base64(), {
-        readText: sel => (isSystemSel(sel) && navigator.clipboard?.readText
-            ? navigator.clipboard.readText().catch(() => '')
-            : Promise.resolve('')),
+        readText: sel =>
+            isSystemSel(sel) && navigator.clipboard?.readText
+                ? navigator.clipboard.readText().catch(() => '')
+                : Promise.resolve(''),
         writeText: (sel, text) => (isSystemSel(sel) ? this.doCopy(text) : Promise.resolve()),
     });
     private webLinksAddon = new WebLinksAddon();
