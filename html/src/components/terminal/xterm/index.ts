@@ -188,6 +188,12 @@ export class Xterm {
     private socket?: WebSocket;
     private token: string;
     private opened = false;
+    // The bridge (window.ttyd) and window.term binding for this terminal. Built
+    // once in open() and installed onto the window globals only while this tab
+    // is the active one — see activate(). Keeping the assignment out of open()
+    // is what lets many terminals coexist without fighting over the singletons
+    // the virtual keyboard talks to.
+    private bridge?: TtydBridge;
     private title?: string;
     private titleFixed?: string;
     private resizeOverlay = true;
@@ -221,7 +227,10 @@ export class Xterm {
 
     constructor(
         private options: XtermOptions,
-        private sendCb: () => void
+        private sendCb: () => void,
+        // Bubbles the terminal's window/process title up to the tab bar so the
+        // owning tab chip can relabel itself.
+        private onTitle?: (title: string) => void
     ) {}
 
     // Coalesce fit() calls to one per frame, skip invalid/no-op dims, and
@@ -268,6 +277,33 @@ export class Xterm {
             d.dispose();
         }
         this.disposables.length = 0;
+    }
+
+    // Full teardown for when a tab is put to sleep (unmounted after 30s
+    // inactive): close the socket and dispose the xterm instance so the
+    // WebSocket, its WebGL context and DOM are all released. dispose() alone —
+    // used on reconnect — deliberately keeps the socket and terminal alive, so
+    // sleeping needs this stronger path. The tmux session lives on the host, so
+    // waking the tab later just reconnects and redraws the current screen.
+    @bind
+    public destroy() {
+        this.reconnect = false;
+        this.doReconnect = false;
+        this.autoReconnectSetup = false;
+        for (const d of this.resumeDisposables) d.dispose();
+        this.resumeDisposables.length = 0;
+        this.dispose();
+        try {
+            this.socket?.close();
+        } catch {
+            // ignore
+        }
+        this.socket = undefined;
+        try {
+            this.terminal?.dispose();
+        } catch {
+            // ignore
+        }
     }
 
     // Copy text to the system clipboard, degrading through every mechanism the
@@ -687,8 +723,6 @@ export class Xterm {
     public open(parent: HTMLElement) {
         this.terminal = new Terminal(this.options.termOptions);
         const { terminal, fitAddon, overlayAddon, clipboardAddon, webLinksAddon } = this;
-        window.term = terminal as TtydTerminal;
-        window.term.fit = () => this.safeFit();
 
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(overlayAddon);
@@ -859,13 +893,18 @@ export class Xterm {
             }
             return null;
         };
+        // These listeners live on `document`, so with several tabs mounted at
+        // once every terminal would otherwise react to the same paste/drop.
+        // Only the active tab (the one owning window.term) should consume it.
         const onPaste = (e: ClipboardEvent) => {
+            if (!this.isActive()) return;
             const img = imageFrom(e.clipboardData);
             if (!img) return; // text paste — leave xterm's own handling alone
             e.preventDefault();
             void this.pasteImage(img);
         };
         const onDrop = (e: DragEvent) => {
+            if (!this.isActive()) return;
             const img = imageFrom(e.dataTransfer);
             if (!img) return;
             e.preventDefault();
@@ -887,7 +926,7 @@ export class Xterm {
         });
 
         const prevHook = window.ttyd?.vkbdHook;
-        window.ttyd = {
+        this.bridge = {
             sendBytes: data => this.sendData(data),
             pasteImage: blob => this.pasteImage(blob),
             scrollLines: n => dispatchWheel(n * getRowHeight()),
@@ -927,6 +966,31 @@ export class Xterm {
         };
 
         this.setupAutoReconnect();
+    }
+
+    // Make this terminal the active one: point the window.term / window.ttyd
+    // singletons (which the virtual keyboard and paste/copy paths read) at this
+    // instance, preserving the vkbd hook across the swap so modifier state and
+    // the input bar keep working after a tab switch. Called by the Terminal
+    // component whenever its tab becomes active.
+    @bind
+    public activate() {
+        if (!this.terminal || !this.bridge) return;
+        const prevHook = window.ttyd?.vkbdHook;
+        window.term = this.terminal as TtydTerminal;
+        window.term.fit = () => this.safeFit();
+        this.bridge.vkbdHook = prevHook;
+        window.ttyd = this.bridge;
+        // The pane was display:none until now, so xterm measured 0×0 and never
+        // fit. Now that it's visible, re-fit to the real geometry.
+        this.safeFit();
+        const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+        if (!coarse) this.terminal.focus();
+    }
+
+    // Is this instance the one currently owning the window singletons?
+    private isActive(): boolean {
+        return !!this.terminal && window.term === (this.terminal as TtydTerminal);
     }
 
     // Auto-reconnect when the page becomes visible again. On mobile
@@ -980,8 +1044,14 @@ export class Xterm {
         const { terminal, overlayAddon, register, sendData } = this;
         register(
             terminal.onTitleChange(data => {
-                if (data && data !== '' && !this.titleFixed) {
-                    document.title = data + ' | ' + this.title;
+                if (data && data !== '') {
+                    // The OSC-0 title (session/agent name from the wrapper) is
+                    // the best tab label — bubble it regardless of which tab is
+                    // active. Only the active tab owns the document title.
+                    this.onTitle?.(data);
+                    if (!this.titleFixed && this.isActive()) {
+                        document.title = data + ' | ' + this.title;
+                    }
                 }
             })
         );
@@ -1171,7 +1241,8 @@ export class Xterm {
                 break;
             case Command.SET_WINDOW_TITLE:
                 this.title = textDecoder.decode(data);
-                document.title = this.title;
+                this.onTitle?.(this.title);
+                if (this.isActive()) document.title = this.title;
                 break;
             case Command.SET_PREFERENCES:
                 this.applyPreferences({

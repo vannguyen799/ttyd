@@ -1,0 +1,590 @@
+// macOS tab bar. Docks on any of the four edges (top/bottom horizontal strip;
+// left/right Edge-style vertical column) and has a collapsed "menu" mode.
+//
+// Glass is applied ONLY where a surface floats over terminal content — the
+// menu-mode FAB and the popovers. The docked strip sits in its own layout track
+// with nothing but the page behind it, so see-through glass would buy nothing
+// and just cost a GPU blur pass; it stays a solid opaque bar.
+$glass-blur: blur(40px) saturate(200%);
+$bar-bg: #1c1c20; // solid — the strip is docked, not overlaying content
+$bar-border: rgba(255, 255, 255, 0.12);
+$hairline: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+
+$chip-bg: rgba(255, 255, 255, 0.05);
+$chip-hover: rgba(255, 255, 255, 0.1);
+$chip-active: rgba(255, 255, 255, 0.16);
+$accent: #0a84ff;
+$accent-soft: rgba(10, 132, 255, 0.28);
+$accent-line: rgba(10, 132, 255, 0.55);
+$text: #e6e6ea;
+$muted: rgba(255, 255, 255, 0.5);
+
+.tabbar {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    box-sizing: border-box;
+    background: $bar-bg;
+    color: $text;
+    font-family:
+        system-ui,
+        -apple-system,
+        'Segoe UI',
+        sans-serif;
+    font-size: 12.5px;
+    user-select: none;
+    -webkit-user-select: none;
+    z-index: 30;
+}
+
+// ── Horizontal strip (top / bottom) ──────────────────────────────
+.tabbar-strip.tabbar-top {
+    padding: 4px 7px;
+    border-bottom: 1px solid $bar-border;
+    box-shadow:
+        $hairline,
+        0 6px 20px rgba(0, 0, 0, 0.3);
+}
+.tabbar-strip.tabbar-bottom {
+    padding: 4px 7px;
+    border-top: 1px solid $bar-border;
+    box-shadow:
+        $hairline,
+        0 -6px 20px rgba(0, 0, 0, 0.3);
+}
+.tabbar-strip.tabbar-top,
+.tabbar-strip.tabbar-bottom {
+    flex-direction: row;
+    overflow: visible;
+
+    .tabbar-tabs {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 5px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;
+        min-width: 0;
+    }
+    .tabbar-spacer {
+        flex: 1 1 auto;
+    }
+    .tab-chip {
+        max-width: 220px;
+    }
+}
+
+// ── Vertical column (left / right, Edge-style) ───────────────────
+.tabbar-strip.tabbar-left,
+.tabbar-strip.tabbar-right {
+    flex-direction: column;
+    align-items: stretch;
+    width: 190px;
+    padding: 7px;
+    gap: 5px;
+
+    &.tabbar-left {
+        border-right: 1px solid $bar-border;
+        box-shadow:
+            $hairline,
+            6px 0 20px rgba(0, 0, 0, 0.3);
+    }
+    &.tabbar-right {
+        border-left: 1px solid $bar-border;
+        box-shadow:
+            $hairline,
+            -6px 0 20px rgba(0, 0, 0, 0.3);
+    }
+    .tabbar-tabs {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 5px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        min-height: 0;
+        flex: 1 1 auto;
+    }
+    .tabbar-spacer {
+        display: none;
+    }
+    .tabbar-add {
+        width: 100%;
+    }
+    .tabbar-opts {
+        position: absolute;
+        top: 7px;
+        right: 7px;
+    }
+    .tab-chip {
+        width: 100%;
+    }
+}
+
+// ── Column resize handle (left / right) ──────────────────────────
+// A thin grab strip straddling the column's inner edge. Drag to widen/narrow;
+// the width persists. Invisible until hovered/dragged, then a bright accent
+// rule appears so it reads as a splitter.
+.tabbar-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 11px;
+    cursor: ew-resize;
+    z-index: 50;
+    touch-action: none; // let pointer capture own the drag on touch
+
+    &::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-50%);
+        background: transparent;
+        transition: background 0.14s ease;
+    }
+    &:hover::after,
+    &.resizing::after {
+        background: $accent-line;
+    }
+}
+.tabbar-left .tabbar-resize {
+    right: -5px;
+}
+.tabbar-right .tabbar-resize {
+    left: -5px;
+}
+
+// ── Tab chip (glass) ─────────────────────────────────────────────
+.tab-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 6px 9px;
+    background: $chip-bg;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition:
+        background 0.14s ease,
+        border-color 0.14s ease,
+        box-shadow 0.14s ease;
+
+    &:hover {
+        background: $chip-hover;
+    }
+    &.active {
+        background: $chip-active;
+        border-color: rgba(255, 255, 255, 0.18);
+        box-shadow:
+            $hairline,
+            0 1px 6px rgba(0, 0, 0, 0.25);
+    }
+
+    .tab-dot {
+        flex: 0 0 auto;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: $muted;
+    }
+    &.active .tab-dot {
+        background: $accent;
+        box-shadow: 0 0 8px rgba(10, 132, 255, 0.7);
+    }
+    // Asleep: connection released; dim the chip and hollow the dot.
+    &.sleeping:not(.active) {
+        opacity: 0.6;
+        .tab-title {
+            color: $muted;
+        }
+        .tab-dot {
+            background: transparent;
+            box-shadow: inset 0 0 0 1.5px $muted;
+        }
+    }
+
+    .tab-title {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .tab-close {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        background: transparent;
+        border: none;
+        border-radius: 6px;
+        color: $muted;
+        font-size: 11px;
+        line-height: 1;
+        cursor: pointer;
+        transition:
+            background 0.12s ease,
+            color 0.12s ease;
+
+        &:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+        }
+    }
+
+    // Dragged chip while reordering.
+    &.dragging {
+        opacity: 0.5;
+        cursor: grabbing;
+    }
+
+    // Inline rename box (double-click a chip).
+    .tab-rename {
+        flex: 1 1 auto;
+        min-width: 0;
+        width: 100%;
+        padding: 2px 6px;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid $accent-line;
+        border-radius: 6px;
+        color: #fff;
+        font-family: inherit;
+        font-size: 12.5px;
+        line-height: 1.4;
+        outline: none;
+        box-shadow: 0 0 0 3px $accent-soft;
+    }
+}
+
+// ── Buttons (glass) ──────────────────────────────────────────────
+.tabbar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 9px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9px;
+    color: $text;
+    font-size: 14px;
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    transition:
+        background 0.14s ease,
+        transform 0.06s ease;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.13);
+    }
+    &:active {
+        transform: scale(0.95);
+    }
+    &.active {
+        background: $accent-soft;
+        border-color: $accent-line;
+        box-shadow:
+            $hairline,
+            0 0 10px rgba(10, 132, 255, 0.3);
+    }
+}
+.tabbar-add {
+    font-size: 15px;
+}
+
+// ── Menu mode: a single floating glass button ────────────────────
+// One of the five exclusive bar layouts. Taken out of flow so it doesn't
+// reserve bar space; the terminal fills the whole stage. Anchored top-left
+// (the vkbd ⌨ icon lives bottom-right, so they stay clear of each other).
+.tabbar-menu {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    z-index: 40;
+}
+
+.tabbar-fab {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    background: rgba(40, 40, 44, 0.62);
+    color: $text;
+    border: 1px solid $bar-border;
+    border-radius: 50%;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    backdrop-filter: $glass-blur;
+    -webkit-backdrop-filter: $glass-blur;
+    box-shadow:
+        0 8px 24px rgba(0, 0, 0, 0.5),
+        $hairline;
+    transition:
+        background 0.14s ease,
+        transform 0.08s ease;
+
+    &:hover {
+        background: rgba(60, 60, 66, 0.7);
+    }
+    &:active {
+        transform: scale(0.94);
+    }
+    &.active {
+        background: $accent-soft;
+        border-color: $accent-line;
+        color: #fff;
+    }
+
+    .tabbar-fab-count {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: $accent;
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        border-radius: 9px;
+        font-size: 11px;
+        font-weight: 700;
+        box-shadow: 0 2px 6px rgba(10, 132, 255, 0.5);
+    }
+}
+
+// ── Popovers (menu list + position options) ──────────────────────
+.tabbar-pop {
+    position: absolute;
+    z-index: 60;
+    min-width: 200px;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 6px;
+    background: rgba(30, 30, 34, 0.75);
+    backdrop-filter: $glass-blur;
+    -webkit-backdrop-filter: $glass-blur;
+    border: 1px solid $bar-border;
+    border-radius: 14px;
+    box-shadow:
+        0 16px 40px rgba(0, 0, 0, 0.55),
+        $hairline;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+// Anchor popovers just inside the bar; edge-specific offsets keep them on-screen.
+.tabbar-top .tabbar-pop {
+    top: calc(100% + 5px);
+    left: 7px;
+}
+.tabbar-bottom .tabbar-pop {
+    bottom: calc(100% + 5px);
+    left: 7px;
+}
+.tabbar-left .tabbar-pop {
+    top: 7px;
+    left: calc(100% + 5px);
+}
+.tabbar-right .tabbar-pop {
+    top: 7px;
+    right: calc(100% + 5px);
+}
+.tabbar-pop-pos {
+    right: 7px;
+    left: auto;
+}
+
+.tabbar-pop-title {
+    padding: 3px 6px;
+    color: $muted;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.tabbar-mode-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+}
+.tabbar-mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 9px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: $text;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.12);
+    }
+    &.active {
+        background: $accent-soft;
+        border-color: $accent-line;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    }
+    .tabbar-mode-icon {
+        font-size: 14px;
+    }
+    // The 5th option (Menu) spans the full row under the 2×2 position grid.
+    &:last-child {
+        grid-column: 1 / -1;
+    }
+}
+.tabbar-scale-control {
+    margin-top: 8px;
+
+    .tabbar-pop-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .tabbar-scale-val {
+        margin-left: auto;
+        color: $text;
+        font-variant-numeric: tabular-nums;
+    }
+    .tabbar-scale-reset {
+        background: transparent;
+        border: none;
+        color: $accent-line;
+        font-size: 11px;
+        cursor: pointer;
+        padding: 0;
+        text-transform: none;
+        letter-spacing: 0;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
+    .tabbar-scale-range {
+        width: 100%;
+        margin: 4px 0 2px;
+        accent-color: $accent-line;
+    }
+}
+.tabbar-pop-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 9px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: $text;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.1);
+    }
+    &.active {
+        color: #fff;
+    }
+    .tabbar-check {
+        font-size: 13px;
+    }
+}
+.tabbar-pop-add {
+    margin-top: 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: #6cb0ff;
+}
+.tabbar-pop-list .tab-chip.in-menu {
+    width: 100%;
+    border-radius: 8px;
+}
+
+// ── Menu-mode list popover (anchored just below the floating button) ─────
+.tabbar-menu .tabbar-pop-list {
+    top: calc(100% + 6px);
+    bottom: auto;
+    left: 0;
+    right: auto;
+    min-width: 220px;
+}
+.tabbar-pop-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 1px 1px 6px 6px;
+    margin-bottom: 3px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+
+    .tabbar-pop-title {
+        padding: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: $text;
+        font-size: 12.5px;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+}
+.tabbar-pop-close {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: $muted;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    transition:
+        background 0.12s ease,
+        color 0.12s ease;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.16);
+        color: #fff;
+    }
+}
+.tabbar-pop-opts {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}

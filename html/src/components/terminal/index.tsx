@@ -7,6 +7,11 @@ import { Modal } from '../modal';
 
 interface Props extends XtermOptions {
     id: string;
+    // Whether this tab is the visible/active one. Only the active terminal owns
+    // the window.term / window.ttyd singletons the vkbd talks to.
+    active?: boolean;
+    // Bubbles the terminal's title up to the owning tab chip.
+    onTitle?: (title: string) => void;
 }
 
 interface State {
@@ -16,20 +21,32 @@ interface State {
 export class Terminal extends Component<Props, State> {
     private container: HTMLElement;
     private xterm: Xterm;
+    private opened = false;
 
     constructor(props: Props) {
         super();
-        this.xterm = new Xterm(props, this.showModal);
+        this.xterm = new Xterm(props, this.showModal, props.onTitle);
     }
 
     async componentDidMount() {
         await this.xterm.refreshToken();
         this.xterm.open(this.container);
         this.xterm.connect();
+        this.opened = true;
+        if (this.props.active) this.xterm.activate();
+    }
+
+    componentDidUpdate(prev: Props) {
+        // Became active (tab switch): claim the singletons and re-fit now that
+        // the pane is visible.
+        if (this.props.active && !prev.active && this.opened) {
+            this.xterm.activate();
+        }
     }
 
     componentWillUnmount() {
-        this.xterm.dispose();
+        // Sleeping a tab (or closing it): fully release the socket + WebGL.
+        this.xterm.destroy();
     }
 
     render({ id }: Props, { modal }: State) {

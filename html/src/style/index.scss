@@ -1,4 +1,5 @@
 @import '../components/vkbd/style.scss';
+@import '../components/tabs/style.scss';
 
 // Floating selection tooltip — shows selected text preview + Copy button.
 // Appears just below the end of the xterm selection, styled to match the
@@ -163,25 +164,65 @@ body {
     overflow: hidden;
 }
 
+// The app is a flex box: the tab bar takes its intrinsic size on one edge and
+// the terminal stage fills the rest. Bar position decides the flex axis and
+// whether the bar comes before (top/left) or after (bottom/right) the stage.
 .app-root {
     height: 100%;
-    display: block;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+
+    &.bar-top {
+        flex-direction: column;
+    }
+    &.bar-bottom {
+        flex-direction: column-reverse;
+    }
+    &.bar-left {
+        flex-direction: row;
+    }
+    &.bar-right {
+        flex-direction: row-reverse;
+    }
 }
 
-body.vkbd-docked-bottom #terminal-container {
-    height: calc(100% - var(--vkbd-dock-height, 0px));
+// Holds every terminal pane, stacked. Only the active pane is shown; the rest
+// stay mounted (WebSocket alive, tmux still receiving output) but display:none.
+.term-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
-body.vkbd-docked-top #terminal-container {
-    height: calc(100% - var(--vkbd-dock-height, 0px));
-    margin-top: var(--vkbd-dock-height, 0px);
+// The docked virtual keyboard shrinks the stage. The panes are absolutely
+// positioned, so their containing block is the stage's *padding box* — padding
+// on the stage would NOT push an `inset: 0` pane inward (it would still cover
+// the padding area and render under the keyboard). Offset the panes' own edge
+// by the dock height instead so the terminal actually stops above the keyboard.
+body.vkbd-docked-bottom .term-pane {
+    bottom: var(--vkbd-dock-height, 0px);
+}
+body.vkbd-docked-top .term-pane {
+    top: var(--vkbd-dock-height, 0px);
 }
 
-#terminal-container {
-    width: auto;
-    height: 100%;
-    margin: 0 auto;
-    padding: 0;
+.term-pane {
+    position: absolute;
+    inset: 0;
+
+    &:not(.active) {
+        display: none;
+    }
+
+    // The Terminal component's own root div.
+    > div {
+        width: 100%;
+        height: 100%;
+    }
+
     .terminal {
         padding: 5px;
         height: calc(100% - 10px);
