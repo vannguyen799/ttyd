@@ -22,6 +22,8 @@ export interface Settings {
     pos: { x: number; y: number } | null;
     width: number | null;
     keyHeight: number | null;
+    // Proportional key-size multiplier (font, padding, height). 1 = default.
+    scale: number;
     scrollStep: number;
     autoRepeat: boolean;
     repeatDelayMs: number;
@@ -29,6 +31,8 @@ export interface Settings {
     showInput: boolean;
     // Render a small caption above each group's rows.
     showGroupLabels: boolean;
+    // Render the tiny sub-label (hint) under each key's main label.
+    showKeySub: boolean;
     termFontSize: number | null;
 }
 
@@ -69,16 +73,18 @@ function defaultFloating(): { pos: { x: number; y: number }; width: number } {
 
 const DEFAULTS_STATIC: Omit<Settings, 'visible' | 'pos' | 'width' | 'disabledGroups'> = {
     position: 'bottom',
-    opacity: 0.92,
+    opacity: 0.18,
     disabledIds: [],
     custom: [],
     keyHeight: null,
+    scale: 1,
     scrollStep: 5,
     autoRepeat: true,
     repeatDelayMs: 350,
     repeatIntervalMs: 60,
     showInput: true,
     showGroupLabels: false,
+    showKeySub: true,
     termFontSize: null,
 };
 
@@ -147,6 +153,16 @@ function sanitizeName(s: string): string {
 }
 
 export function ttydSessionName(): string {
+    // With multiple tabs the active tab's session is published to a global by
+    // App (window.ttydSession); it wins over the page URL so per-session input
+    // history/drafts and the label follow the active tab. Falls back to the URL
+    // for the single-terminal / no-tabs case.
+    try {
+        const active = (window as unknown as { ttydSession?: string }).ttydSession;
+        if (typeof active === 'string' && active) return active;
+    } catch {
+        // ignore
+    }
     try {
         const args = new URLSearchParams(window.location.search).getAll('arg');
         // Explicit `name:` modifier wins, mirroring ttyd-session.sh.
@@ -185,6 +201,12 @@ export function ttydSessionName(): string {
 // Leading modifiers (cwd:/name:/codex/claude) are skipped, mirroring
 // ttydSessionName() and the wrapper script.
 export function ttydSessionBackend(): 'tmux' | 'screen' {
+    try {
+        const active = (window as unknown as { ttydBackend?: 'tmux' | 'screen' }).ttydBackend;
+        if (active === 'tmux' || active === 'screen') return active;
+    } catch {
+        // ignore
+    }
     try {
         const args = new URLSearchParams(window.location.search).getAll('arg');
         let i = 0;

@@ -31,7 +31,17 @@ function allKeyIds(): string[] {
     return ids;
 }
 
+type TabId = 'layout' | 'scroll' | 'keys' | 'custom';
+
+const TABS: { id: TabId; label: string; icon: string }[] = [
+    { id: 'layout', label: 'Layout', icon: '▤' },
+    { id: 'scroll', label: 'Scroll', icon: '↕' },
+    { id: 'keys', label: 'Keys', icon: '⌨' },
+    { id: 'custom', label: 'Custom', icon: '＋' },
+];
+
 interface FormState {
+    tab: TabId;
     editingId: string | null;
     label: string;
     sub: string;
@@ -76,7 +86,7 @@ const NAMED_OPTIONS: NamedKey[] = [
     'f12',
 ];
 
-const EMPTY_FORM: FormState = {
+const EMPTY_FORM: Omit<FormState, 'tab'> = {
     editingId: null,
     label: '',
     sub: '',
@@ -95,8 +105,11 @@ const EMPTY_FORM: FormState = {
 export class SettingsPanel extends Component<Props, FormState> {
     constructor(props: Props) {
         super(props);
-        this.state = { ...EMPTY_FORM };
+        this.state = { ...EMPTY_FORM, tab: 'layout' };
     }
+
+    // EMPTY_FORM carries no `tab` key, so resetting the form via
+    // setState({ ...EMPTY_FORM }) leaves the active tab untouched.
 
     private update = (patch: Partial<Settings>) => {
         this.props.onChange({ ...this.props.settings, ...patch });
@@ -130,7 +143,7 @@ export class SettingsPanel extends Component<Props, FormState> {
 
     private startEdit = (k: CustomKey) => {
         const action = k.action;
-        const form: FormState = {
+        const form: Omit<FormState, 'tab'> = {
             ...EMPTY_FORM,
             editingId: k.id,
             label: k.label,
@@ -182,9 +195,6 @@ export class SettingsPanel extends Component<Props, FormState> {
     };
 
     render(props: Props, s: FormState) {
-        const { settings } = props;
-        const disabled = new Set(settings.disabledIds);
-        const disabledGroups = new Set(settings.disabledGroups);
         return (
             <div class="vkbd-settings" onClick={e => e.stopPropagation()}>
                 <div class="vkbd-settings-header">
@@ -194,395 +204,466 @@ export class SettingsPanel extends Component<Props, FormState> {
                     </button>
                 </div>
 
-                <div class="vkbd-section">
-                    <div class="vkbd-section-title">Appearance</div>
-                    <div class="vkbd-row-setting">
-                        <label>Mode</label>
-                        <select
-                            value={settings.pos ? 'float' : settings.position === 'top' ? 'dock-top' : 'dock-bottom'}
-                            onChange={e => {
-                                const v = (e.target as HTMLSelectElement).value;
-                                if (v === 'float') {
-                                    const w = Math.min(window.innerWidth - 24, 520);
-                                    const x = Math.max(12, Math.round((window.innerWidth - w) / 2));
-                                    const y = Math.max(12, window.innerHeight - 240);
-                                    this.update({ pos: { x, y }, width: w });
-                                } else if (v === 'dock-top') {
-                                    this.update({ pos: null, position: 'top' });
-                                } else {
-                                    this.update({ pos: null, position: 'bottom' });
-                                }
-                            }}
+                <div class="vkbd-tabs" role="tablist">
+                    {TABS.map(t => (
+                        <button
+                            key={t.id}
+                            role="tab"
+                            aria-selected={s.tab === t.id}
+                            class={`vkbd-tab ${s.tab === t.id ? 'active' : ''}`}
+                            onClick={() => this.setState({ tab: t.id })}
                         >
-                            <option value="dock-bottom">Dock bottom (split)</option>
-                            <option value="dock-top">Dock top (split)</option>
-                            <option value="float">Float / drag (overlay)</option>
-                        </select>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Opacity</label>
-                        <input
-                            type="range"
-                            min="0.4"
-                            max="1"
-                            step="0.05"
-                            value={settings.opacity}
-                            onInput={e => this.update({ opacity: parseFloat((e.target as HTMLInputElement).value) })}
-                        />
-                        <span>{Math.round(settings.opacity * 100)}%</span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Layout</label>
-                        <button class="vkbd-text-btn" onClick={props.onReset}>
-                            Reset size
+                            <span class="vkbd-tab-icon" aria-hidden="true">
+                                {t.icon}
+                            </span>
+                            <span class="vkbd-tab-label">{t.label}</span>
                         </button>
-                        <span class="vkbd-hint">
-                            {settings.pos
-                                ? `float · ${Math.round(settings.width || 0)}×${settings.keyHeight || 38}`
-                                : `docked ${settings.position}`}
-                        </span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Input field</label>
-                        <input
-                            type="checkbox"
-                            checked={settings.showInput}
-                            onChange={e => this.update({ showInput: (e.target as HTMLInputElement).checked })}
-                        />
-                        <span class="vkbd-hint">compose buffer + Send button</span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Group labels</label>
-                        <input
-                            type="checkbox"
-                            checked={settings.showGroupLabels}
-                            onChange={e => this.update({ showGroupLabels: (e.target as HTMLInputElement).checked })}
-                        />
-                        <span class="vkbd-hint">caption above each key group</span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Term font</label>
-                        <input
-                            type="range"
-                            min="6"
-                            max="24"
-                            step="1"
-                            value={settings.termFontSize || 12}
-                            onInput={e =>
-                                this.update({ termFontSize: parseInt((e.target as HTMLInputElement).value, 10) })
-                            }
-                        />
-                        <span class="vkbd-hint">
-                            {settings.termFontSize ? `${settings.termFontSize}px` : 'auto'}
-                            {settings.termFontSize ? (
-                                <button
-                                    class="vkbd-text-btn"
-                                    onClick={() => this.update({ termFontSize: null })}
-                                    style={{ marginLeft: 6 }}
-                                >
-                                    reset
-                                </button>
-                            ) : null}
-                        </span>
-                    </div>
+                    ))}
                 </div>
 
-                <div class="vkbd-section">
-                    <div class="vkbd-section-title">Scroll</div>
-                    <div class="vkbd-row-setting">
-                        <label>Lines/click</label>
-                        <input
-                            type="range"
-                            min="1"
-                            max="40"
-                            step="1"
-                            value={settings.scrollStep}
-                            onInput={e =>
-                                this.update({ scrollStep: parseInt((e.target as HTMLInputElement).value, 10) })
-                            }
-                        />
-                        <span class="vkbd-hint">{settings.scrollStep} line(s)</span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Auto-repeat</label>
-                        <input
-                            type="checkbox"
-                            checked={settings.autoRepeat}
-                            onChange={e => this.update({ autoRepeat: (e.target as HTMLInputElement).checked })}
-                        />
-                        <span class="vkbd-hint">hold scroll button to repeat</span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Hold delay</label>
-                        <input
-                            type="range"
-                            min="100"
-                            max="1000"
-                            step="50"
-                            value={settings.repeatDelayMs}
-                            disabled={!settings.autoRepeat}
-                            onInput={e =>
-                                this.update({ repeatDelayMs: parseInt((e.target as HTMLInputElement).value, 10) })
-                            }
-                        />
-                        <span class="vkbd-hint">{settings.repeatDelayMs}ms</span>
-                    </div>
-                    <div class="vkbd-row-setting">
-                        <label>Repeat rate</label>
-                        <input
-                            type="range"
-                            min="20"
-                            max="300"
-                            step="10"
-                            value={settings.repeatIntervalMs}
-                            disabled={!settings.autoRepeat}
-                            onInput={e =>
-                                this.update({ repeatIntervalMs: parseInt((e.target as HTMLInputElement).value, 10) })
-                            }
-                        />
-                        <span class="vkbd-hint">every {settings.repeatIntervalMs}ms</span>
-                    </div>
+                <div class="vkbd-settings-body">
+                    {s.tab === 'layout' ? this.renderLayoutTab(props) : null}
+                    {s.tab === 'scroll' ? this.renderScrollTab(props) : null}
+                    {s.tab === 'keys' ? this.renderKeysTab(props) : null}
+                    {s.tab === 'custom' ? this.renderCustomTab(props, s) : null}
                 </div>
+            </div>
+        );
+    }
 
-                <div class="vkbd-section">
-                    <div class="vkbd-section-title">
-                        Built-in keys
-                        <span class="vkbd-actions">
-                            <button class="vkbd-text-btn" onClick={() => this.toggleAllBuiltin(true)}>
-                                Enable all
+    private renderLayoutTab(props: Props) {
+        const { settings } = props;
+        return (
+            <div class="vkbd-section">
+                <div class="vkbd-section-title">Appearance</div>
+                <div class="vkbd-row-setting">
+                    <label>Mode</label>
+                    <select
+                        value={settings.pos ? 'float' : settings.position === 'top' ? 'dock-top' : 'dock-bottom'}
+                        onChange={e => {
+                            const v = (e.target as HTMLSelectElement).value;
+                            if (v === 'float') {
+                                const w = Math.min(window.innerWidth - 24, 520);
+                                const x = Math.max(12, Math.round((window.innerWidth - w) / 2));
+                                const y = Math.max(12, window.innerHeight - 240);
+                                this.update({ pos: { x, y }, width: w });
+                            } else if (v === 'dock-top') {
+                                this.update({ pos: null, position: 'top' });
+                            } else {
+                                this.update({ pos: null, position: 'bottom' });
+                            }
+                        }}
+                    >
+                        <option value="dock-bottom">Dock bottom (split)</option>
+                        <option value="dock-top">Dock top (split)</option>
+                        <option value="float">Float / drag (overlay)</option>
+                    </select>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Opacity</label>
+                    <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={settings.opacity}
+                        onInput={e => this.update({ opacity: parseFloat((e.target as HTMLInputElement).value) })}
+                    />
+                    <span>{Math.round(settings.opacity * 100)}%</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Key size</label>
+                    <input
+                        type="range"
+                        min="0.7"
+                        max="1.6"
+                        step="0.05"
+                        value={settings.scale ?? 1}
+                        onInput={e => this.update({ scale: parseFloat((e.target as HTMLInputElement).value) })}
+                    />
+                    <span class="vkbd-hint">
+                        {Math.round((settings.scale ?? 1) * 100)}%
+                        {(settings.scale ?? 1) !== 1 ? (
+                            <button
+                                class="vkbd-text-btn"
+                                onClick={() => this.update({ scale: 1 })}
+                                style={{ marginLeft: 6 }}
+                            >
+                                reset
                             </button>
-                            <button class="vkbd-text-btn" onClick={() => this.toggleAllBuiltin(false)}>
-                                Disable all
+                        ) : null}
+                    </span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Layout</label>
+                    <button class="vkbd-text-btn" onClick={props.onReset}>
+                        Reset size
+                    </button>
+                    <span class="vkbd-hint">
+                        {settings.pos
+                            ? `float · ${Math.round(settings.width || 0)}×${settings.keyHeight || 38}`
+                            : `docked ${settings.position}`}
+                    </span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Input field</label>
+                    <input
+                        type="checkbox"
+                        checked={settings.showInput}
+                        onChange={e => this.update({ showInput: (e.target as HTMLInputElement).checked })}
+                    />
+                    <span class="vkbd-hint">compose buffer + Send button</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Group labels</label>
+                    <input
+                        type="checkbox"
+                        checked={settings.showGroupLabels}
+                        onChange={e => this.update({ showGroupLabels: (e.target as HTMLInputElement).checked })}
+                    />
+                    <span class="vkbd-hint">caption above each key group</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Key hints</label>
+                    <input
+                        type="checkbox"
+                        checked={settings.showKeySub}
+                        onChange={e => this.update({ showKeySub: (e.target as HTMLInputElement).checked })}
+                    />
+                    <span class="vkbd-hint">tiny caption under each key label</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Term font</label>
+                    <input
+                        type="range"
+                        min="6"
+                        max="24"
+                        step="1"
+                        value={settings.termFontSize || 12}
+                        onInput={e => this.update({ termFontSize: parseInt((e.target as HTMLInputElement).value, 10) })}
+                    />
+                    <span class="vkbd-hint">
+                        {settings.termFontSize ? `${settings.termFontSize}px` : 'auto'}
+                        {settings.termFontSize ? (
+                            <button
+                                class="vkbd-text-btn"
+                                onClick={() => this.update({ termFontSize: null })}
+                                style={{ marginLeft: 6 }}
+                            >
+                                reset
                             </button>
-                        </span>
-                    </div>
-                    {GROUPS.map(g => {
-                        const groupOff = disabledGroups.has(g.id);
-                        return (
-                            <div key={g.id} class={`vkbd-keygroup ${groupOff ? 'off' : ''}`}>
-                                <label class="vkbd-keygroup-head">
-                                    <input
-                                        type="checkbox"
-                                        checked={!groupOff}
-                                        onChange={() => this.toggleGroup(g.id)}
-                                    />
-                                    <span>{g.title}</span>
-                                    {g.tmuxOnly ? <em>tmux</em> : null}
-                                </label>
-                                <div class="vkbd-grid">
-                                    {g.rows.map((row, ri) =>
-                                        row.keys.map((k, ki) => {
-                                            const id = keyId(g.id, ri, ki, k);
-                                            const isDisabled = disabled.has(id);
-                                            return (
-                                                <label key={id} class={`vkbd-check ${isDisabled ? 'off' : ''}`}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={!isDisabled}
-                                                        onChange={() => this.toggleBuiltin(id)}
-                                                    />
-                                                    <span>{k.label}</span>
-                                                    {k.sub ? <em>{k.sub}</em> : null}
-                                                </label>
-                                            );
-                                        })
-                                    )}
-                                </div>
+                        ) : null}
+                    </span>
+                </div>
+            </div>
+        );
+    }
+
+    private renderScrollTab(props: Props) {
+        const { settings } = props;
+        return (
+            <div class="vkbd-section">
+                <div class="vkbd-section-title">Scroll</div>
+                <div class="vkbd-row-setting">
+                    <label>Lines/click</label>
+                    <input
+                        type="range"
+                        min="1"
+                        max="40"
+                        step="1"
+                        value={settings.scrollStep}
+                        onInput={e => this.update({ scrollStep: parseInt((e.target as HTMLInputElement).value, 10) })}
+                    />
+                    <span class="vkbd-hint">{settings.scrollStep} line(s)</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Auto-repeat</label>
+                    <input
+                        type="checkbox"
+                        checked={settings.autoRepeat}
+                        onChange={e => this.update({ autoRepeat: (e.target as HTMLInputElement).checked })}
+                    />
+                    <span class="vkbd-hint">hold scroll button to repeat</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Hold delay</label>
+                    <input
+                        type="range"
+                        min="100"
+                        max="1000"
+                        step="50"
+                        value={settings.repeatDelayMs}
+                        disabled={!settings.autoRepeat}
+                        onInput={e =>
+                            this.update({ repeatDelayMs: parseInt((e.target as HTMLInputElement).value, 10) })
+                        }
+                    />
+                    <span class="vkbd-hint">{settings.repeatDelayMs}ms</span>
+                </div>
+                <div class="vkbd-row-setting">
+                    <label>Repeat rate</label>
+                    <input
+                        type="range"
+                        min="20"
+                        max="300"
+                        step="10"
+                        value={settings.repeatIntervalMs}
+                        disabled={!settings.autoRepeat}
+                        onInput={e =>
+                            this.update({ repeatIntervalMs: parseInt((e.target as HTMLInputElement).value, 10) })
+                        }
+                    />
+                    <span class="vkbd-hint">every {settings.repeatIntervalMs}ms</span>
+                </div>
+            </div>
+        );
+    }
+
+    private renderKeysTab(props: Props) {
+        const { settings } = props;
+        const disabled = new Set(settings.disabledIds);
+        const disabledGroups = new Set(settings.disabledGroups);
+        return (
+            <div class="vkbd-section">
+                <div class="vkbd-section-title">
+                    Built-in keys
+                    <span class="vkbd-actions">
+                        <button class="vkbd-text-btn" onClick={() => this.toggleAllBuiltin(true)}>
+                            Enable all
+                        </button>
+                        <button class="vkbd-text-btn" onClick={() => this.toggleAllBuiltin(false)}>
+                            Disable all
+                        </button>
+                    </span>
+                </div>
+                {GROUPS.map(g => {
+                    const groupOff = disabledGroups.has(g.id);
+                    return (
+                        <div key={g.id} class={`vkbd-keygroup ${groupOff ? 'off' : ''}`}>
+                            <label class="vkbd-keygroup-head">
+                                <input type="checkbox" checked={!groupOff} onChange={() => this.toggleGroup(g.id)} />
+                                <span>{g.title}</span>
+                                {g.tmuxOnly ? <em>tmux</em> : null}
+                            </label>
+                            <div class="vkbd-grid">
+                                {g.rows.map((row, ri) =>
+                                    row.keys.map((k, ki) => {
+                                        const id = keyId(g.id, ri, ki, k);
+                                        const isDisabled = disabled.has(id);
+                                        return (
+                                            <label key={id} class={`vkbd-check ${isDisabled ? 'off' : ''}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!isDisabled}
+                                                    onChange={() => this.toggleBuiltin(id)}
+                                                />
+                                                <span>{k.label}</span>
+                                                {k.sub ? <em>{k.sub}</em> : null}
+                                            </label>
+                                        );
+                                    })
+                                )}
                             </div>
-                        );
-                    })}
-                </div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
 
-                <div class="vkbd-section">
-                    <div class="vkbd-section-title">
-                        Custom combos
-                        <label class="vkbd-keygroup-head inline">
+    private renderCustomTab(props: Props, s: FormState) {
+        const { settings } = props;
+        const disabledGroups = new Set(settings.disabledGroups);
+        return (
+            <div class="vkbd-section">
+                <div class="vkbd-section-title">
+                    Custom combos
+                    <label class="vkbd-keygroup-head inline">
+                        <input
+                            type="checkbox"
+                            checked={!disabledGroups.has(CUSTOM_GROUP_ID)}
+                            onChange={() => this.toggleGroup(CUSTOM_GROUP_ID)}
+                        />
+                        <span>Custom group</span>
+                    </label>
+                </div>
+                {settings.custom.length === 0 ? (
+                    <div class="vkbd-empty">No custom combos yet.</div>
+                ) : (
+                    <div class="vkbd-custom-list">
+                        {settings.custom.map(k => (
+                            <div key={k.id} class="vkbd-custom-item">
+                                <span class="vkbd-custom-label">
+                                    <strong>{k.label}</strong>
+                                    {k.sub ? <em> {k.sub}</em> : null}
+                                    <em class="vkbd-custom-group"> → {groupTitle(k.group)}</em>
+                                </span>
+                                <span class="vkbd-custom-preview">
+                                    {k.action.type === 'send'
+                                        ? encodeForDisplay(k.action.bytes)
+                                        : k.action.type === 'text'
+                                        ? `text: ${k.action.text}`
+                                        : k.action.type}
+                                </span>
+                                <button class="vkbd-text-btn" onClick={() => this.startEdit(k)}>
+                                    Edit
+                                </button>
+                                <button class="vkbd-text-btn danger" onClick={() => this.deleteCustom(k.id)}>
+                                    Del
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div class="vkbd-form">
+                    <div class="vkbd-form-title">{s.editingId ? 'Edit combo' : 'Add new combo'}</div>
+                    <div class="vkbd-form-row">
+                        <input
+                            type="text"
+                            placeholder="Label (e.g. ^⇧C)"
+                            value={s.label}
+                            onInput={e => this.setState({ label: (e.target as HTMLInputElement).value })}
+                        />
+                        <input
+                            type="text"
+                            placeholder="Sub (optional)"
+                            value={s.sub}
+                            onInput={e => this.setState({ sub: (e.target as HTMLInputElement).value })}
+                        />
+                    </div>
+                    <div class="vkbd-form-row">
+                        <label>Group</label>
+                        <select
+                            value={s.group}
+                            onChange={e => this.setState({ group: (e.target as HTMLSelectElement).value })}
+                        >
+                            {GROUP_OPTIONS.map(g => (
+                                <option key={g.id} value={g.id}>
+                                    {g.title}
+                                </option>
+                            ))}
+                        </select>
+                        <span class="vkbd-hint">where this button appears</span>
+                    </div>
+                    <div class="vkbd-form-row">
+                        <label>
                             <input
-                                type="checkbox"
-                                checked={!disabledGroups.has(CUSTOM_GROUP_ID)}
-                                onChange={() => this.toggleGroup(CUSTOM_GROUP_ID)}
+                                type="radio"
+                                name="mode"
+                                checked={s.mode === 'raw'}
+                                onChange={() => this.setState({ mode: 'raw' })}
                             />
-                            <span>Custom group</span>
+                            Raw bytes
+                        </label>
+                        <label>
+                            <input
+                                type="radio"
+                                name="mode"
+                                checked={s.mode === 'text'}
+                                onChange={() => this.setState({ mode: 'text' })}
+                            />
+                            Text
+                        </label>
+                        <label>
+                            <input
+                                type="radio"
+                                name="mode"
+                                checked={s.mode === 'key'}
+                                onChange={() => this.setState({ mode: 'key' })}
+                            />
+                            Key + mods
                         </label>
                     </div>
-                    {settings.custom.length === 0 ? (
-                        <div class="vkbd-empty">No custom combos yet.</div>
-                    ) : (
-                        <div class="vkbd-custom-list">
-                            {settings.custom.map(k => (
-                                <div key={k.id} class="vkbd-custom-item">
-                                    <span class="vkbd-custom-label">
-                                        <strong>{k.label}</strong>
-                                        {k.sub ? <em> {k.sub}</em> : null}
-                                        <em class="vkbd-custom-group"> → {groupTitle(k.group)}</em>
-                                    </span>
-                                    <span class="vkbd-custom-preview">
-                                        {k.action.type === 'send'
-                                            ? encodeForDisplay(k.action.bytes)
-                                            : k.action.type === 'text'
-                                            ? `text: ${k.action.text}`
-                                            : k.action.type}
-                                    </span>
-                                    <button class="vkbd-text-btn" onClick={() => this.startEdit(k)}>
-                                        Edit
-                                    </button>
-                                    <button class="vkbd-text-btn danger" onClick={() => this.deleteCustom(k.id)}>
-                                        Del
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    <div class="vkbd-form">
-                        <div class="vkbd-form-title">{s.editingId ? 'Edit combo' : 'Add new combo'}</div>
+                    {s.mode === 'raw' ? (
                         <div class="vkbd-form-row">
                             <input
                                 type="text"
-                                placeholder="Label (e.g. ^⇧C)"
-                                value={s.label}
-                                onInput={e => this.setState({ label: (e.target as HTMLInputElement).value })}
-                            />
-                            <input
-                                type="text"
-                                placeholder="Sub (optional)"
-                                value={s.sub}
-                                onInput={e => this.setState({ sub: (e.target as HTMLInputElement).value })}
+                                class="wide"
+                                placeholder={'Escape seq, e.g. \\x1b[A or \\x03'}
+                                value={s.rawBytes}
+                                onInput={e => this.setState({ rawBytes: (e.target as HTMLInputElement).value })}
                             />
                         </div>
+                    ) : null}
+                    {s.mode === 'text' ? (
                         <div class="vkbd-form-row">
-                            <label>Group</label>
+                            <input
+                                type="text"
+                                class="wide"
+                                placeholder={'Text to type (e.g. /clear or claude --...)'}
+                                value={s.text}
+                                onInput={e => this.setState({ text: (e.target as HTMLInputElement).value })}
+                            />
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={s.enterAfter}
+                                    onChange={e =>
+                                        this.setState({ enterAfter: (e.target as HTMLInputElement).checked })
+                                    }
+                                />{' '}
+                                Enter after ↵
+                            </label>
+                        </div>
+                    ) : null}
+                    {s.mode === 'key' ? (
+                        <div class="vkbd-form-row">
                             <select
-                                value={s.group}
-                                onChange={e => this.setState({ group: (e.target as HTMLSelectElement).value })}
+                                value={s.namedKey}
+                                onChange={e =>
+                                    this.setState({ namedKey: (e.target as HTMLSelectElement).value as NamedKey })
+                                }
                             >
-                                {GROUP_OPTIONS.map(g => (
-                                    <option key={g.id} value={g.id}>
-                                        {g.title}
+                                {NAMED_OPTIONS.map(n => (
+                                    <option key={n} value={n}>
+                                        {n}
                                     </option>
                                 ))}
                             </select>
-                            <span class="vkbd-hint">where this button appears</span>
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={s.ctrl}
+                                    onChange={e => this.setState({ ctrl: (e.target as HTMLInputElement).checked })}
+                                />{' '}
+                                Ctrl
+                            </label>
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={s.shift}
+                                    onChange={e => this.setState({ shift: (e.target as HTMLInputElement).checked })}
+                                />{' '}
+                                Shift
+                            </label>
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={s.alt}
+                                    onChange={e => this.setState({ alt: (e.target as HTMLInputElement).checked })}
+                                />{' '}
+                                Alt
+                            </label>
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    checked={s.meta}
+                                    onChange={e => this.setState({ meta: (e.target as HTMLInputElement).checked })}
+                                />{' '}
+                                Meta
+                            </label>
                         </div>
-                        <div class="vkbd-form-row">
-                            <label>
-                                <input
-                                    type="radio"
-                                    name="mode"
-                                    checked={s.mode === 'raw'}
-                                    onChange={() => this.setState({ mode: 'raw' })}
-                                />
-                                Raw bytes
-                            </label>
-                            <label>
-                                <input
-                                    type="radio"
-                                    name="mode"
-                                    checked={s.mode === 'text'}
-                                    onChange={() => this.setState({ mode: 'text' })}
-                                />
-                                Text
-                            </label>
-                            <label>
-                                <input
-                                    type="radio"
-                                    name="mode"
-                                    checked={s.mode === 'key'}
-                                    onChange={() => this.setState({ mode: 'key' })}
-                                />
-                                Key + mods
-                            </label>
-                        </div>
-                        {s.mode === 'raw' ? (
-                            <div class="vkbd-form-row">
-                                <input
-                                    type="text"
-                                    class="wide"
-                                    placeholder={'Escape seq, e.g. \\x1b[A or \\x03'}
-                                    value={s.rawBytes}
-                                    onInput={e => this.setState({ rawBytes: (e.target as HTMLInputElement).value })}
-                                />
-                            </div>
-                        ) : null}
-                        {s.mode === 'text' ? (
-                            <div class="vkbd-form-row">
-                                <input
-                                    type="text"
-                                    class="wide"
-                                    placeholder={'Text to type (e.g. /clear or claude --...)'}
-                                    value={s.text}
-                                    onInput={e => this.setState({ text: (e.target as HTMLInputElement).value })}
-                                />
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={s.enterAfter}
-                                        onChange={e =>
-                                            this.setState({ enterAfter: (e.target as HTMLInputElement).checked })
-                                        }
-                                    />{' '}
-                                    Enter after ↵
-                                </label>
-                            </div>
-                        ) : null}
-                        {s.mode === 'key' ? (
-                            <div class="vkbd-form-row">
-                                <select
-                                    value={s.namedKey}
-                                    onChange={e =>
-                                        this.setState({ namedKey: (e.target as HTMLSelectElement).value as NamedKey })
-                                    }
-                                >
-                                    {NAMED_OPTIONS.map(n => (
-                                        <option key={n} value={n}>
-                                            {n}
-                                        </option>
-                                    ))}
-                                </select>
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={s.ctrl}
-                                        onChange={e => this.setState({ ctrl: (e.target as HTMLInputElement).checked })}
-                                    />{' '}
-                                    Ctrl
-                                </label>
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={s.shift}
-                                        onChange={e => this.setState({ shift: (e.target as HTMLInputElement).checked })}
-                                    />{' '}
-                                    Shift
-                                </label>
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={s.alt}
-                                        onChange={e => this.setState({ alt: (e.target as HTMLInputElement).checked })}
-                                    />{' '}
-                                    Alt
-                                </label>
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={s.meta}
-                                        onChange={e => this.setState({ meta: (e.target as HTMLInputElement).checked })}
-                                    />{' '}
-                                    Meta
-                                </label>
-                            </div>
-                        ) : null}
-                        <div class="vkbd-form-row right">
-                            {s.editingId ? (
-                                <button class="vkbd-text-btn" onClick={this.cancelForm}>
-                                    Cancel
-                                </button>
-                            ) : null}
-                            <button class="vkbd-primary-btn" onClick={this.saveForm}>
-                                {s.editingId ? 'Save' : 'Add'}
+                    ) : null}
+                    <div class="vkbd-form-row right">
+                        {s.editingId ? (
+                            <button class="vkbd-text-btn" onClick={this.cancelForm}>
+                                Cancel
                             </button>
-                        </div>
+                        ) : null}
+                        <button class="vkbd-primary-btn" onClick={this.saveForm}>
+                            {s.editingId ? 'Save' : 'Add'}
+                        </button>
                     </div>
                 </div>
             </div>

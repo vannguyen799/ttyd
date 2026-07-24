@@ -41,7 +41,13 @@ function isCoarse(): boolean {
     }
 }
 
-export class VirtualKeyboard extends Component<Record<string, never>, State> {
+interface Props {
+    // The active tab's session name. Changing it re-renders the vkbd so its
+    // per-session label, input history and draft follow the active tab.
+    sessionName?: string;
+}
+
+export class VirtualKeyboard extends Component<Props, State> {
     private hostEl: HTMLDivElement | null = null;
     private dragState: {
         pointerId: number;
@@ -101,9 +107,15 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
         }
     }
 
-    componentDidUpdate() {
+    componentDidUpdate(prevProps: Props) {
         this.syncDockedLayout();
         this.applyTermFontSize();
+        // Tab switch: swap the input-bar draft to the newly active session's.
+        if (prevProps.sessionName !== this.props.sessionName && this.inputEl) {
+            const draft = loadInputDraft();
+            this.inputEl.value = draft;
+            this.inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
     }
 
     private applyTermFontSize = () => {
@@ -683,7 +695,7 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
                 onMouseDown={e => e.preventDefault()}
             >
                 <span class="vkbd-label">{def.label}</span>
-                {def.sub ? <span class="vkbd-sub">{def.sub}</span> : null}
+                {def.sub && this.state.settings.showKeySub ? <span class="vkbd-sub">{def.sub}</span> : null}
             </button>
         );
     }
@@ -704,12 +716,18 @@ export class VirtualKeyboard extends Component<Record<string, never>, State> {
             hostStyle.bottom = 'auto';
             hostStyle.width = 'auto';
         }
+        // Drive the frosted-glass background alpha from the user's opacity
+        // setting; the tint + blur + highlight layers live in the stylesheet
+        // (macOS "liquid glass" look) so they compose over whatever alpha.
         const kbdStyle: JSX.CSSProperties = {
-            background: `rgba(20,20,20,${settings.opacity})`,
-        };
+            ['--vkbd-alpha' as keyof JSX.CSSProperties]: String(settings.opacity),
+            ['--vkbd-scale' as keyof JSX.CSSProperties]: String(settings.scale ?? 1),
+        } as JSX.CSSProperties;
         if (settings.width) kbdStyle.width = settings.width + 'px';
         const keyStyleBase: JSX.CSSProperties = {};
-        if (settings.keyHeight) keyStyleBase.minHeight = settings.keyHeight + 'px';
+        // Fold the size multiplier into any dragged key height so the scale
+        // slider stays effective even after the resize corner was used.
+        if (settings.keyHeight) keyStyleBase.minHeight = `calc(${settings.keyHeight}px * var(--vkbd-scale))`;
 
         return (
             <div class={hostClass} style={hostStyle} ref={el => (this.hostEl = el)}>

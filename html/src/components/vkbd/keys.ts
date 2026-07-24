@@ -243,6 +243,18 @@ export const GROUPS: KeyGroup[] = [
                         class: 'tmux',
                     },
                     {
+                        // Switch focus between panes. With `mouse off` (see
+                        // tmux-persist.conf) tapping a pane can't move focus, and
+                        // there's no other touch path — so after a split the user is
+                        // stranded in the new pane. prefix+o cycles to the next pane,
+                        // which works for any split layout (unlike a directional
+                        // select-pane, which would need one button per direction).
+                        label: '◐ Pane',
+                        sub: 'switch',
+                        action: { type: 'send', bytes: TMUX + 'o' },
+                        class: 'tmux',
+                    },
+                    {
                         // prefix `:` opens tmux's command prompt; the command must
                         // arrive in a *separate* write or tmux types it into the
                         // shell instead (mode switch needs an event-loop tick).
