@@ -2,7 +2,7 @@
 # ══════════════════════════════════════════════════════════════════════
 # setup-ubuntu-vps.sh — one-shot ttyd + vkbd (virtual keyboard) installer
 # ══════════════════════════════════════════════════════════════════════
-# Builds the custom ttyd fork (vannguyen799/ttyd) which has the on-screen
+# Builds the custom ttyd fork (vannguyen799/ttyd-pro) which has the on-screen
 # virtual keyboard (vkbd) baked into the binary, installs it system-wide,
 # and starts a web terminal with tmux session routing + persistence.
 #
@@ -10,7 +10,7 @@
 # Safe to re-run — every step is idempotent.
 #
 # Quick use (from anywhere):
-#   curl -fsSL https://raw.githubusercontent.com/vannguyen799/ttyd/main/deploy/scripts/setup-ubuntu-vps.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/vannguyen799/ttyd-pro/main/deploy/scripts/setup-ubuntu-vps.sh | bash
 #
 # Or from a checkout:
 #   bash ttyd/deploy/scripts/setup-ubuntu-vps.sh [OPTIONS]
@@ -22,13 +22,13 @@
 #   -n, --no-auth          Disable authentication
 #   -t, --tunnel           Also open a Cloudflare quick tunnel (public URL)
 #       --no-start         Build + install only, don't start the server
-#       --repo URL         ttyd fork git URL (default: vannguyen799/ttyd)
+#       --repo URL         ttyd fork git URL (default: vannguyen799/ttyd-pro)
 #       --dir PATH         Where to clone the fork (default: ~/ttyd)
 #   -h, --help             Show this help
 # ══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-REPO_URL_DEFAULT="https://github.com/vannguyen799/ttyd.git"
+REPO_URL_DEFAULT="https://github.com/vannguyen799/ttyd-pro.git"
 TTYD_DIR_DEFAULT="$HOME/ttyd"
 
 PORT=7681
