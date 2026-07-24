@@ -24,6 +24,13 @@ PIDFILE_TTYD="/tmp/ttyd.pid"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION_WRAPPER="$SCRIPT_DIR/ttyd-session.sh"
 
+# User-installed CLIs such as Claude Code commonly live here. Services often
+# start with a minimal PATH that omits it, so make it available to ttyd and
+# every session launched by the wrapper.
+if [ -n "${HOME:-}" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'

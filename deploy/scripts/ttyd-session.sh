@@ -53,6 +53,12 @@
 
 set -u
 
+# Keep user-installed agent CLIs discoverable even when ttyd was started by a
+# service with a minimal PATH.
+if [ -n "${HOME:-}" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
 SHELL_CMD="${SHELL:-/bin/bash}"
 
 # Clipboard bridge: Claude Code reads a pasted image off the X clipboard
