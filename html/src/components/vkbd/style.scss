@@ -491,6 +491,14 @@ $fg-dim: rgba(255, 255, 255, 0.6);
     margin-top: 1px;
 }
 
+// Hints hidden: without the sub-label line the caps would just get shorter,
+// so grow them a touch (taller cap + bigger glyph) to keep them comfortable
+// to tap. Still scales off --vkbd-scale like the base cap.
+.vkbd.no-sub .vkbd-key {
+    min-height: calc(44px * var(--vkbd-scale, 1));
+    font-size: calc(14px * var(--vkbd-scale, 1));
+}
+
 .vkbd-fab {
     position: fixed;
     right: 12px;
@@ -912,6 +920,10 @@ $fg-dim: rgba(255, 255, 255, 0.6);
         min-height: calc(28px * var(--vkbd-scale, 1));
         font-size: calc(9px * var(--vkbd-scale, 1));
         border-radius: 7px;
+    }
+    .vkbd.no-sub .vkbd-key {
+        min-height: calc(34px * var(--vkbd-scale, 1));
+        font-size: calc(11px * var(--vkbd-scale, 1));
     }
     .vkbd-sub {
         font-size: calc(6px * var(--vkbd-scale, 1));

@@ -736,7 +736,11 @@ export class VirtualKeyboard extends Component<Props, State> {
                         ⌨
                     </button>
                 ) : (
-                    <div class="vkbd" style={kbdStyle} onContextMenu={this.onContextMenu}>
+                    <div
+                        class={`vkbd${settings.showKeySub ? '' : ' no-sub'}`}
+                        style={kbdStyle}
+                        onContextMenu={this.onContextMenu}
+                    >
                         <div class="vkbd-toolbar">
                             <button class="vkbd-icon-btn" onClick={this.openSettings} aria-label="Settings">
                                 ⚙

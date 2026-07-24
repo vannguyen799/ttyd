@@ -194,64 +194,38 @@ export const GROUPS: KeyGroup[] = [
                         // wheel to the app and the pane never enters copy-mode. These
                         // go through the prefix, which tmux claims first regardless —
                         // see the C-p/C-n bindings in tmux-persist.conf.
-                        label: '▲ tmux',
+                        label: '▲',
                         sub: 'scroll',
                         action: { type: 'send', bytes: TMUX + '\x10' },
                         class: 'tmux',
                         repeat: true,
                     },
                     {
-                        label: '▼ tmux',
+                        label: '▼',
                         sub: 'scroll',
                         action: { type: 'send', bytes: TMUX + '\x0e' },
                         class: 'tmux',
                         repeat: true,
                     },
                     {
-                        // Jump back to the live bottom. Goes through the prefix
-                        // (→ `if-shell '#{pane_in_mode}' 'send-keys -X cancel'`)
-                        // rather than the bare C-e it sent before: a TUI with mouse
-                        // reporting on swallowed that C-e as a plain end-of-line, so
-                        // the button silently did nothing in exactly the app people
-                        // use it in. The binding is a no-op outside copy-mode, so
-                        // pressing it any time is safe.
+                        // Jump to the end / live bottom by sending a plain Ctrl+End
+                        // (CSI 1;5F) straight to the app — no tmux prefix. This is the
+                        // key combo most TUIs and shells treat as "go to bottom".
                         label: '⏷ Last',
-                        sub: 'to bottom',
-                        action: { type: 'send', bytes: TMUX + '\x05' },
+                        sub: 'Ctrl+End',
+                        action: { type: 'send', bytes: '\x1b[1;5F' },
                         class: 'tmux',
                     },
                     {
-                        // Copy recent output straight to the clipboard with no
-                        // selection step — `capture-pane | load-buffer -w` → OSC 52.
-                        // Selecting text by hand is painful on a phone, and this is
-                        // the case people actually want ("give me what just printed").
-                        label: '⧉ Screen',
-                        sub: '→ clip',
-                        action: { type: 'send', bytes: TMUX + '\x17' },
-                        class: 'tmux',
-                    },
-                    {
-                        label: 'Split │',
+                        label: '│',
                         sub: 'L | R',
                         action: { type: 'send', bytes: TMUX + '%' },
                         class: 'tmux',
                     },
                     {
-                        label: 'Split ─',
+                        label: '─',
                         sub: 'T / B',
                         action: { type: 'send', bytes: TMUX + '"' },
-                        class: 'tmux',
-                    },
-                    {
-                        // Switch focus between panes. With `mouse off` (see
-                        // tmux-persist.conf) tapping a pane can't move focus, and
-                        // there's no other touch path — so after a split the user is
-                        // stranded in the new pane. prefix+o cycles to the next pane,
-                        // which works for any split layout (unlike a directional
-                        // select-pane, which would need one button per direction).
-                        label: '◐ Pane',
-                        sub: 'switch',
-                        action: { type: 'send', bytes: TMUX + 'o' },
                         class: 'tmux',
                     },
                     {
@@ -293,18 +267,6 @@ export const GROUPS: KeyGroup[] = [
                         action: { type: 'send', bytes: TMUX + '\x1b[1;5C' },
                         class: 'tmux',
                         repeat: true,
-                    },
-                    {
-                        // Push the current tmux copy-buffer to the system clipboard.
-                        // Sends prefix+C-y, which tmux-persist.conf binds to
-                        // `load-buffer -w` → an OSC 52 sequence that xterm's
-                        // ClipboardAddon writes to the clipboard. Driven through tmux
-                        // (not typed at a shell prompt) so it works inside TUI apps
-                        // like Claude, unlike the old `printf '\e]52…'` command.
-                        label: 'buf→clip',
-                        sub: 'tmux buf',
-                        action: { type: 'send', bytes: TMUX + '\x19' },
-                        class: 'tmux',
                     },
                 ],
             },
