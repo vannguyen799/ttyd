@@ -383,6 +383,7 @@ $fg-dim: rgba(255, 255, 255, 0.6);
 
 .vkbd-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 5px;
     width: 100%;
 }
@@ -393,7 +394,12 @@ $fg-dim: rgba(255, 255, 255, 0.6);
 // colour layered over the blur), so the whole board reads as one material.
 .vkbd-key {
     flex: 1 1 0;
-    min-width: 0;
+    // A real min-width (not 0) is what lets a row wrap: it's the floor the flex
+    // line-break algorithm uses, so once the caps can't shrink past it the row
+    // breaks onto a new line instead of squishing them into slivers. flex-grow
+    // still fills each line's slack and basis:0 keeps every cap the same width,
+    // so a wide board stays one uniform row and only wraps when cramped.
+    min-width: calc(42px * var(--vkbd-scale, 1));
     // Proportional sizing: --vkbd-scale (default 1) multiplies height, padding
     // and glyph so the whole board grows/shrinks from one slider.
     min-height: calc(38px * var(--vkbd-scale, 1));
@@ -918,6 +924,7 @@ $fg-dim: rgba(255, 255, 255, 0.6);
     }
     .vkbd-key {
         min-height: calc(28px * var(--vkbd-scale, 1));
+        min-width: calc(32px * var(--vkbd-scale, 1));
         font-size: calc(9px * var(--vkbd-scale, 1));
         border-radius: 7px;
     }
