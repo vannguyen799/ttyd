@@ -164,6 +164,21 @@ body {
     overflow: hidden;
 }
 
+// One-screen app: never paint a native scrollbar. The terminal viewport, the
+// tab list and the keyboard settings panes all still scroll (wheel, touch,
+// keys, programmatic) — only the visible track/thumb is gone. Zero-specificity
+// `*` so any element that scrolls is covered by default; a component that
+// really wants a visible bar can still opt back in with a class rule.
+* {
+    scrollbar-width: none; // Firefox
+    -ms-overflow-style: none; // legacy Edge
+}
+*::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none; // Chrome / Safari / Edge
+}
+
 // The app is a flex box: the tab bar takes its intrinsic size on one edge and
 // the terminal stage fills the rest. Bar position decides the flex axis and
 // whether the bar comes before (top/left) or after (bottom/right) the stage.
