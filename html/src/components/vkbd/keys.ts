@@ -187,23 +187,25 @@ export const GROUPS: KeyGroup[] = [
             {
                 keys: [
                     {
-                        // tmux-side scrollback. The generic ▲/▼ Scroll keys in the
-                        // "fn" group synthesize a wheel event, which is right for a
-                        // bare shell but useless here: once the foreground app turns
-                        // on mouse reporting (Claude Code, vim, htop) tmux hands the
-                        // wheel to the app and the pane never enters copy-mode. These
-                        // go through the prefix, which tmux claims first regardless —
-                        // see the C-p/C-n bindings in tmux-persist.conf.
+                        // Scroll via a synthesized wheel event, NOT prefix+C-p. The
+                        // panes here usually run a full-screen app (Claude Code, vim,
+                        // htop) on the terminal's ALTERNATE screen — where tmux
+                        // copy-mode has no scrollback at all, so prefix+C-p/C-n enter
+                        // an empty copy-mode and nothing scrolls. A wheel, with tmux
+                        // mouse-on, is instead routed by tmux to the foreground app
+                        // (it scrolls its own transcript) or, in a bare shell, turned
+                        // into a copy-mode scroll. Same mechanism as the "fn" group's
+                        // ▲/▼ Scroll keys — correct in both cases.
                         label: '▲',
                         sub: 'scroll',
-                        action: { type: 'send', bytes: TMUX + '\x10' },
+                        action: { type: 'scroll', by: 'line', dir: -1 },
                         class: 'tmux',
                         repeat: true,
                     },
                     {
                         label: '▼',
                         sub: 'scroll',
-                        action: { type: 'send', bytes: TMUX + '\x0e' },
+                        action: { type: 'scroll', by: 'line', dir: 1 },
                         class: 'tmux',
                         repeat: true,
                     },
