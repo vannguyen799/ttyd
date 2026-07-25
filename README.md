@@ -1,17 +1,45 @@
-![backend](https://github.com/tsl0922/ttyd/workflows/backend/badge.svg)
-![frontend](https://github.com/tsl0922/ttyd/workflows/frontend/badge.svg)
-[![GitHub Releases](https://img.shields.io/github/downloads/tsl0922/ttyd/total)](https://github.com/tsl0922/ttyd/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/tsl0922/ttyd)](https://hub.docker.com/r/tsl0922/ttyd)
-[![Packaging status](https://repology.org/badge/tiny-repos/ttyd.svg)](https://repology.org/project/ttyd/versions)
-![GitHub](https://img.shields.io/github/license/tsl0922/ttyd)
+# ttyd-pro — a mobile-first fork of ttyd
 
-# ttyd - Share your terminal over the web
+**ttyd-pro** is a fork of [tsl0922/ttyd](https://github.com/tsl0922/ttyd) that turns the classic
+"share your terminal over the web" tool into a practical **phone-and-tablet terminal** for driving
+`tmux`, `claude`, `codex`, and other TUIs from a browser.
 
-ttyd is a simple command-line tool for sharing terminal over the web.
+It keeps everything the upstream binary does and layers on a custom front-end plus an operational
+deploy kit:
 
-![screenshot](https://github.com/tsl0922/ttyd/raw/main/screenshot.gif)
+- 📱 **On-screen virtual keyboard (vkbd)** — grouped, scalable keys with Ctrl/Alt/arrows, `tmux`
+  controls, and one-tap Claude/Codex command shortcuts (`/resume`, `/rewind`, `/compact`, …).
+- 🗂 **Multi-tab terminal UI** — several sessions in one browser tab, an auto-hiding overlay bar,
+  and per-tab sleep/wake with auto-reconnect on mobile.
+- 📋 **Copy & paste that actually works on mobile** — OSC 52 → `execCommand` → tap-to-copy sheet
+  fallback for plain-HTTP origins, touch select-mode, and a floating copy tooltip.
+- 🖼 **Image paste into Claude Code** — paste or drag a screenshot and it arrives as a real
+  `[Image #1]` chip via a tiny headless-X clipboard bridge.
+- 🔀 **URL-based session routing** — `?arg=work`, `?arg=claude&arg=dev`, `cwd:` modifiers, etc.,
+  auto-attach to named `tmux`/`screen` sessions.
+- 🛠 **Deploy layer** — start/stop/status scripts that run a localhost-only ttyd backend behind a
+  public vkbd UI, with optional tmux session persistence across reboots.
 
-# Features
+> The C backend and protocol are unchanged from upstream ttyd. All fork additions live in the
+> `html/` front-end and the `deploy/` operational layer.
+
+![screenshot](screenshot.gif)
+
+# Fork features
+
+| Area | What ttyd-pro adds |
+|------|--------------------|
+| Virtual keyboard | Grouped/scalable keys, tmux scroll & copy-mode controls, Claude/Codex slash-command shortcuts, custom buttons, Android/iOS input fixes |
+| Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, per-tab sleep/wake |
+| Mobile | Auto-reconnect on tab re-activation, client-side auth-token persistence, no leave-site alert (tmux persists) |
+| Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, image paste-in |
+| tmux | Mouse-driven pane switching, drag-to-copy, wheel/prefix scroll into copy-mode, buffer→clipboard keys |
+| Deploy | One-command start of backend + UI, headless-X image bridge, tmux persistence, VPS bootstrap |
+
+The `deploy/` directory has its own [README](deploy/README.md) covering the runtime architecture,
+clipboard internals, session routing, and persistence in depth.
+
+# Upstream features (inherited)
 
 - Built on top of [libuv](https://libuv.org) and [WebGL2](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API) for speed
 - Fully-featured terminal with [CJK](https://en.wikipedia.org/wiki/CJK_characters) and IME support
@@ -22,28 +50,64 @@ ttyd is a simple command-line tool for sharing terminal over the web.
 - Basic authentication support and many other custom options
 - Cross platform: macOS, Linux, FreeBSD/OpenBSD, [OpenWrt](https://openwrt.org), Windows
 
-# Installation
+# Quick start
 
-## Install on macOS
+The fastest path is the deploy kit, which starts the localhost ttyd backend and the public vkbd UI
+together:
 
-- Install with [Homebrew](http://brew.sh): `brew install ttyd`
-- Install with [MacPorts](https://www.macports.org): `sudo port install ttyd`
+```bash
+bash deploy/scripts/start-ttyd.sh
+```
 
-## Install on Linux
+```
+══════════════════════════════════════════════════════════════
+  WEB TERMINAL READY
+══════════════════════════════════════════════════════════════
 
-- Install on Debian/Ubuntu: `sudo apt install ttyd`
-- Install the snap: `sudo snap install ttyd --classic`
-- Install on OpenWrt: `opkg install ttyd`
-- Install on Gentoo: clone the [repo](https://bitbucket.org/mgpagano/ttyd/src/master) and follow the directions [here](https://wiki.gentoo.org/wiki/Custom_repository#Creating_a_local_repository).
-- Install with [Homebrew](https://docs.brew.sh/Homebrew-on-Linux) : `brew install ttyd`
-- Precompiled static binaries: download from the [releases](https://github.com/tsl0922/ttyd/releases) page
+  URL: http://localhost:10090       # public vkbd UI (the one you open)
 
-## Install on Windows
+  Username: user
+  Password: abc12345
 
-- Binary version (recommended): download from the [releases](https://github.com/tsl0922/ttyd/releases) page
-- Install with [WinGet](https://github.com/microsoft/winget-cli): `winget install tsl0922.ttyd`
-- Install with [Scoop](https://scoop.sh/#/apps?q=ttyd&s=2&d=1&o=true): `scoop install ttyd`
-- [Compile on Windows](https://github.com/tsl0922/ttyd/wiki/Compile-on-Windows)
+  Stop: bash deploy/scripts/stop-ttyd.sh
+══════════════════════════════════════════════════════════════
+```
+
+Only port **10090** is meant to be exposed/tunneled — the ttyd backend stays bound to
+`127.0.0.1:7681`. See [deploy/README.md](deploy/README.md) for options, session routing, image
+paste, and persistence.
+
+On a fresh Ubuntu VPS, `bash deploy/scripts/setup-ubuntu-vps.sh` builds, installs, and starts
+everything in one shot.
+
+# Build from source
+
+## Backend (ttyd binary)
+
+Standard CMake build, same as upstream:
+
+```bash
+mkdir build && cd build
+cmake ..
+make && sudo make install
+```
+
+See the upstream [build instructions](https://github.com/tsl0922/ttyd#build-from-source) for
+dependencies (libwebsockets, libuv, json-c, OpenSSL/Mbed TLS).
+
+## Front-end (vkbd UI)
+
+The custom UI lives in `html/` and compiles to the embedded `src/html.h`.
+
+> **NOTE:** yarn v2 is required.
+
+```bash
+cd html
+yarn install
+yarn run build     # builds the UI and inlines it into ../src/html.h
+```
+
+For UI development, run `yarn run start` (webpack dev server) against a running `ttyd bash`.
 
 # Usage
 
@@ -85,13 +149,17 @@ OPTIONS:
     -h, --help              Print this text and exit
 ```
 
-Read the example usage on the [wiki](https://github.com/tsl0922/ttyd/wiki/Example-Usage).
+Read the example usage on the upstream [wiki](https://github.com/tsl0922/ttyd/wiki/Example-Usage).
 
 ## Browser Support
 
 Modern browsers, See [Browser Support](https://github.com/xtermjs/xterm.js#browser-support).
 
-## Alternatives
+# Credits
 
-* [Wetty](https://github.com/krishnasrinivas/wetty): [Node](https://nodejs.org) based web terminal (SSH/login)
-* [GoTTY](https://github.com/yudai/gotty): [Go](https://golang.org) based web terminal
+ttyd-pro is built on [tsl0922/ttyd](https://github.com/tsl0922/ttyd) by Shuanglei Tao and
+contributors. All upstream copyrights remain with their authors.
+
+# License
+
+MIT — see [LICENSE](LICENSE).
