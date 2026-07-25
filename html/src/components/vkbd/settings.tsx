@@ -260,6 +260,8 @@ export class SettingsPanel extends Component<Props, FormState> {
                     </select>
                 </div>
                 <div class="vkbd-row-setting">
+                    {/* Docked splits the screen — nothing shows through the pane,
+                        so the bar is always solid and the slider is inert there. */}
                     <label>Opacity</label>
                     <input
                         type="range"
@@ -267,9 +269,11 @@ export class SettingsPanel extends Component<Props, FormState> {
                         max="1"
                         step="0.05"
                         value={settings.opacity}
+                        disabled={!settings.pos}
+                        title={settings.pos ? undefined : 'Float mode only — docked is always solid'}
                         onInput={e => this.update({ opacity: parseFloat((e.target as HTMLInputElement).value) })}
                     />
-                    <span>{Math.round(settings.opacity * 100)}%</span>
+                    <span>{settings.pos ? `${Math.round(settings.opacity * 100)}%` : 'solid'}</span>
                 </div>
                 <div class="vkbd-row-setting">
                     <label>Key size</label>

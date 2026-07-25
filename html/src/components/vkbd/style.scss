@@ -55,14 +55,25 @@ $fg-dim: rgba(255, 255, 255, 0.6);
     z-index: 70;
     pointer-events: none;
 
-    &.pos-bottom {
-        left: 0;
-        right: 0;
-        bottom: 0;
-    }
+    // Docked (bottom/top) splits the screen with the terminal instead of
+    // overlaying it — there is nothing behind the pane to see through, so the
+    // Opacity setting is ignored and the glass renders solid. Only the free /
+    // floating keyboard, which sits ON the terminal, stays translucent.
+    &.pos-bottom,
     &.pos-top {
         left: 0;
         right: 0;
+
+        .vkbd {
+            --vkbd-alpha-eff: 1;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+    }
+    &.pos-bottom {
+        bottom: 0;
+    }
+    &.pos-top {
         top: 0;
     }
     &.pos-free {
@@ -91,8 +102,11 @@ $fg-dim: rgba(255, 255, 255, 0.6);
     // terminal shows through the glass) plus a barely-there white top sheen for
     // the highlight — all the "frost" comes from the heavy backdrop blur above,
     // not from an opaque fill. Drop Opacity to ~10–20% for full see-through glass.
+    // --vkbd-alpha-eff lets the docked layouts pin the fill to solid; the
+    // element's inline --vkbd-alpha (the user setting) is the fallback, and it
+    // can't be overridden directly because an inline custom property always wins.
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 45%),
-        rgba(28, 28, 32, var(--vkbd-alpha, 0.18));
+        rgba(28, 28, 32, var(--vkbd-alpha-eff, var(--vkbd-alpha, 0.18)));
     backdrop-filter: $glass-blur;
     -webkit-backdrop-filter: $glass-blur;
     border-top: 1px solid $glass-border;
@@ -685,6 +699,11 @@ $fg-dim: rgba(255, 255, 255, 0.6);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 6px;
         padding: 3px 7px;
+
+        &:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
     }
 
     .vkbd-hint {
