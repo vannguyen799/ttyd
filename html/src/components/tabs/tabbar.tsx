@@ -3,19 +3,25 @@ import { clampColWidth } from './model';
 import type { BarMode, BarPosition, TabInfo } from './model';
 
 interface Props {
-    tabs: TabInfo[];
+    tabs: TabInfo[]; // tabs to render (already scoped to the current view)
+    totalTabs: number; // total tab count across all groups (governs "can close last")
     activeId: string;
     liveIds: string[]; // tabs with a live connection; others are asleep
     position: BarPosition;
     menuMode: boolean;
     scale: number;
     colWidth: number; // column width (px) in left/right mode
+    autoHide: boolean; // collapse the bar when idle; reveal on edge-hover
+    showAllGroups: boolean; // show every tab vs only the active tab's namespace
+    groupLabel: string; // the active namespace (entry session name)
     onSelect: (id: string) => void;
     onClose: (id: string) => void;
     onAdd: () => void;
     onSetMode: (mode: BarMode) => void;
     onSetScale: (scale: number) => void;
     onSetColWidth: (width: number) => void;
+    onSetAutoHide: (v: boolean) => void;
+    onSetShowAll: (v: boolean) => void;
     onReorder: (fromId: string, targetId: string) => void;
     onRename: (id: string, title: string) => void;
 }
@@ -27,10 +33,19 @@ interface State {
     editingId: string | null; // chip being renamed inline
     editValue: string; // in-progress rename text
     resizing: boolean; // column width drag in progress (left/right mode)
+    hidden: boolean; // auto-hide: bar collapsed off its edge
 }
 
 // Pointer travel (px) before a press on a chip becomes a drag rather than a tap.
 const DRAG_THRESHOLD = 6;
+
+// Auto-hide timing. Collapse after this long with the pointer off the bar…
+const AUTO_HIDE_MS = 2000;
+// …and reveal only after the pointer dwells this long inside the edge zone, so a
+// pointer merely passing along the edge doesn't pop the bar out.
+const AUTO_REVEAL_MS = 500;
+// How close (px) to the docked edge the pointer must come to arm the reveal.
+const EDGE_ZONE_PX = 24;
 
 // The five exclusive bar layouts, shown as one mode picker.
 const MODES: { mode: BarMode; icon: string; label: string }[] = [
@@ -45,25 +60,153 @@ const MODES: { mode: BarMode; icon: string; label: string }[] = [
 // left/right), plus a collapsed "menu" mode where a single ☰ button toggles a
 // dropdown list of tabs.
 export class TabBar extends Component<Props, State> {
-    state: State = { menuOpen: false, posOpen: false, dragId: null, editingId: null, editValue: '', resizing: false };
+    state: State = {
+        menuOpen: false,
+        posOpen: false,
+        dragId: null,
+        editingId: null,
+        editValue: '',
+        resizing: false,
+        hidden: false,
+    };
 
     componentDidMount() {
         document.addEventListener('pointerdown', this.onDocDown, true);
+        window.addEventListener('pointermove', this.onWinMove, true);
+        this.syncAutoHide();
     }
     componentWillUnmount() {
         document.removeEventListener('pointerdown', this.onDocDown, true);
+        window.removeEventListener('pointermove', this.onWinMove, true);
+        this.clearHideTimer();
+        this.clearRevealTimer();
     }
 
-    componentDidUpdate(_prev: Props, prevState: State) {
+    componentDidUpdate(prev: Props, prevState: State) {
         // Focus + select the rename box the moment it appears.
         if (this.state.editingId && this.state.editingId !== prevState.editingId && this.renameEl) {
             this.renameEl.focus();
             this.renameEl.select();
         }
+        // React to auto-hide being toggled or the dock edge changing.
+        if (
+            prev.autoHide !== this.props.autoHide ||
+            prev.position !== this.props.position ||
+            prev.menuMode !== this.props.menuMode
+        ) {
+            this.syncAutoHide();
+        }
     }
 
     private rootEl: HTMLElement | null = null;
     private renameEl: HTMLInputElement | null = null;
+
+    // ── Auto-hide state ──────────────────────────────────────────────
+    // Pointer currently over the bar (keeps it out); reveal-zone dwell flag; and
+    // the two timers.
+    private hovered = false;
+    private inZone = false;
+    private hideTimer: number | null = null;
+    private revealTimer: number | null = null;
+
+    private clearHideTimer() {
+        if (this.hideTimer !== null) {
+            window.clearTimeout(this.hideTimer);
+            this.hideTimer = null;
+        }
+    }
+    private clearRevealTimer() {
+        if (this.revealTimer !== null) {
+            window.clearTimeout(this.revealTimer);
+            this.revealTimer = null;
+        }
+        this.inZone = false;
+    }
+
+    // Called on mount and whenever auto-hide / the dock edge changes. Off → show
+    // and drop all timers; on → start the idle countdown unless the pointer is
+    // already on the bar.
+    private syncAutoHide() {
+        if (!this.props.autoHide) {
+            this.clearHideTimer();
+            this.clearRevealTimer();
+            if (this.state.hidden) this.setState({ hidden: false });
+            return;
+        }
+        if (!this.hovered) this.armHide();
+    }
+
+    // Nothing may hide the bar while it's actively in use (renaming, dragging, or
+    // a popover open), else the surface you're working in vanishes under you.
+    private hideBlocked() {
+        return !!this.state.editingId || !!this.state.dragId || this.state.menuOpen || this.state.posOpen;
+    }
+
+    private armHide() {
+        this.clearHideTimer();
+        if (!this.props.autoHide) return;
+        this.hideTimer = window.setTimeout(() => {
+            this.hideTimer = null;
+            if (this.hovered || this.hideBlocked()) {
+                this.armHide(); // still busy — try again after another idle window
+                return;
+            }
+            if (!this.state.hidden) this.setState({ hidden: true });
+        }, AUTO_HIDE_MS);
+    }
+
+    private reveal = () => {
+        this.clearRevealTimer();
+        if (this.state.hidden) this.setState({ hidden: false });
+        // If the pointer doesn't actually settle on the revealed bar, idle it out.
+        this.armHide();
+    };
+
+    // Is the pointer within the reveal zone for the current dock edge?
+    private inRevealZone(x: number, y: number): boolean {
+        if (this.props.menuMode) {
+            // Collapsed FAB lives at the top-left corner; reveal from that corner.
+            return x <= 72 && y <= 72;
+        }
+        switch (this.props.position) {
+            case 'top':
+                return y <= EDGE_ZONE_PX;
+            case 'bottom':
+                return y >= window.innerHeight - EDGE_ZONE_PX;
+            case 'left':
+                return x <= EDGE_ZONE_PX;
+            case 'right':
+                return x >= window.innerWidth - EDGE_ZONE_PX;
+        }
+    }
+
+    // Global pointer tracking, only meaningful while hidden: arm a dwell timer on
+    // entering the edge zone, cancel it on leaving before the dwell completes.
+    private onWinMove = (e: PointerEvent) => {
+        if (!this.props.autoHide || !this.state.hidden) {
+            if (this.revealTimer !== null) this.clearRevealTimer();
+            return;
+        }
+        const zone = this.inRevealZone(e.clientX, e.clientY);
+        if (zone && !this.inZone) {
+            this.inZone = true;
+            if (this.revealTimer === null) this.revealTimer = window.setTimeout(this.reveal, AUTO_REVEAL_MS);
+        } else if (!zone && this.inZone) {
+            this.clearRevealTimer();
+        }
+    };
+
+    // Pointer entered/left the bar itself: hold it out while hovered, re-arm the
+    // idle countdown once the pointer leaves.
+    private onBarEnter = () => {
+        this.hovered = true;
+        this.clearHideTimer();
+        this.clearRevealTimer();
+    };
+    private onBarLeave = () => {
+        this.hovered = false;
+        this.armHide();
+    };
 
     // Pointer-drag reorder state. `active` flips once the press passes the
     // threshold; until then the press is still a potential tap (select).
@@ -214,7 +357,51 @@ export class TabBar extends Component<Props, State> {
                     ))}
                 </div>
                 {this.renderScaleControl()}
+                {this.renderAutoHideControl()}
+                {this.renderGroupToggle()}
             </div>
+        );
+    }
+
+    // Toggle for scoping the tab list. Checked = only the tabs of the current
+    // session (namespace); unchecked = every tab across all sessions. The label
+    // names the active namespace so it's clear what "this session" refers to.
+    private renderGroupToggle() {
+        const { showAllGroups, groupLabel, onSetShowAll } = this.props;
+        const scoped = !showAllGroups;
+        return (
+            <button
+                class={`tabbar-pop-row tabbar-toggle-row${scoped ? ' active' : ''}`}
+                title="Show only the tabs opened under this session name, or all sessions"
+                role="switch"
+                aria-checked={scoped}
+                onClick={() => onSetShowAll(scoped)}
+            >
+                <span class="tabbar-check">{scoped ? '☑' : '☐'}</span>
+                <span class="tabbar-toggle-label">
+                    Only this session
+                    {groupLabel ? <span class="tabbar-group-name">{groupLabel}</span> : null}
+                </span>
+            </button>
+        );
+    }
+
+    // Toggle for the auto-hide behaviour. When on, the bar leaves the layout and
+    // floats over the terminal (translucent glass), collapsing off its edge after
+    // a short idle and sliding back when the pointer dwells at that edge.
+    private renderAutoHideControl() {
+        const { autoHide, onSetAutoHide } = this.props;
+        return (
+            <button
+                class={`tabbar-pop-row tabbar-toggle-row${autoHide ? ' active' : ''}`}
+                title="Float the bar over the terminal and hide it when idle"
+                role="switch"
+                aria-checked={autoHide}
+                onClick={() => onSetAutoHide(!autoHide)}
+            >
+                <span class="tabbar-check">{autoHide ? '☑' : '☐'}</span>
+                <span class="tabbar-toggle-label">Auto-hide bar</span>
+            </button>
         );
     }
 
@@ -255,10 +442,12 @@ export class TabBar extends Component<Props, State> {
     }
 
     private renderChip(t: TabInfo, inMenu: boolean) {
-        const { activeId, liveIds, onClose, tabs } = this.props;
+        const { activeId, liveIds, onClose, totalTabs } = this.props;
         const active = t.id === activeId;
         const asleep = !liveIds.includes(t.id);
-        const canClose = tabs.length > 1;
+        // Close is governed by the total across all namespaces, not the scoped
+        // view: a lone visible tab may still be closed when other groups exist.
+        const canClose = totalTabs > 1;
         const dragging = this.state.dragId === t.id;
         const editing = this.state.editingId === t.id;
         return (
@@ -358,17 +547,25 @@ export class TabBar extends Component<Props, State> {
     }
 
     render() {
-        const { tabs, activeId, position, menuMode, scale, colWidth } = this.props;
-        const { menuOpen, posOpen } = this.state;
+        const { tabs, activeId, position, menuMode, scale, colWidth, autoHide } = this.props;
+        const { menuOpen, posOpen, hidden } = this.state;
         const active = tabs.find(t => t.id === activeId);
         const isColumn = position === 'left' || position === 'right';
         // Real layout zoom (not transform) so the reflowed bar reserves the
         // right amount of space in the app's flex column; plus the resizable
         // column width in left/right mode. An empty object leaves both unset.
         const rootStyle: JSX.CSSProperties = {};
-        if (scale !== 1) rootStyle.zoom = scale;
+        if (scale !== 1) {
+            rootStyle.zoom = scale;
+            // Published for the CSS: zoom scales the auto-hide overlay's edge
+            // insets too, so the stylesheet divides them back out by this.
+            rootStyle['--tabbar-zoom' as keyof JSX.CSSProperties] = String(scale);
+        }
         if (!menuMode && isColumn) rootStyle.width = `${colWidth}px`;
+        // Auto-hide needs no inline geometry: the bar leaves the flow, pins to its
+        // edge and slides off it with a transform — all in CSS (tabs/style.scss).
         const styleProp = Object.keys(rootStyle).length ? rootStyle : undefined;
+        const autoHideCls = autoHide ? ` tabbar-autohide${hidden ? ' hidden' : ''}` : '';
 
         if (menuMode) {
             // Collapsed: a single floating ☰ button (overlay, like the vkbd
@@ -378,10 +575,12 @@ export class TabBar extends Component<Props, State> {
             // button. Anchored top-left; the vkbd icon sits bottom-right.
             return (
                 <div
-                    class="tabbar tabbar-menu"
+                    class={`tabbar tabbar-menu${autoHideCls}`}
                     style={styleProp}
                     ref={el => (this.rootEl = el)}
                     onPointerDown={e => e.stopPropagation()}
+                    onPointerEnter={this.onBarEnter}
+                    onPointerLeave={this.onBarLeave}
                 >
                     <button
                         class={`tabbar-fab${menuOpen ? ' active' : ''}`}
@@ -427,10 +626,12 @@ export class TabBar extends Component<Props, State> {
 
         return (
             <div
-                class={`tabbar tabbar-strip tabbar-${position}`}
+                class={`tabbar tabbar-strip tabbar-${position}${autoHideCls}`}
                 style={styleProp}
                 ref={el => (this.rootEl = el)}
                 onPointerDown={e => e.stopPropagation()}
+                onPointerEnter={this.onBarEnter}
+                onPointerLeave={this.onBarLeave}
             >
                 <div class="tabbar-tabs">{tabs.map(t => this.renderChip(t, false))}</div>
                 {this.addButton()}

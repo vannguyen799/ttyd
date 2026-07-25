@@ -2,9 +2,10 @@
 // left/right Edge-style vertical column) and has a collapsed "menu" mode.
 //
 // Glass is applied ONLY where a surface floats over terminal content — the
-// menu-mode FAB and the popovers. The docked strip sits in its own layout track
-// with nothing but the page behind it, so see-through glass would buy nothing
-// and just cost a GPU blur pass; it stays a solid opaque bar.
+// menu-mode FAB, the popovers, and the auto-hide strip (which is lifted out of
+// flow to overlay the terminal). A plain docked strip sits in its own layout
+// track with nothing but the page behind it, so see-through glass would buy
+// nothing and just cost a GPU blur pass; it stays a solid opaque bar.
 $glass-blur: blur(40px) saturate(200%);
 $bar-bg: #1c1c20; // solid — the strip is docked, not overlaying content
 $bar-border: rgba(255, 255, 255, 0.12);
@@ -158,6 +159,90 @@ $muted: rgba(255, 255, 255, 0.5);
 }
 .tabbar-right .tabbar-resize {
     left: -5px;
+}
+
+// ── Auto-hide (overlay) ──────────────────────────────────────────
+// The bar collapses off its docked edge after a short idle and slides back when
+// the pointer dwells at that edge. In this mode it is taken OUT of layout flow
+// and pinned to its edge, floating ON the terminal: the stage keeps the whole
+// window, so the terminal never reflows as the bar slides in and out — and,
+// because there is finally content behind the bar, its translucent fill and
+// backdrop blur actually read as glass instead of tinting a dead layout track.
+.tabbar-strip.tabbar-autohide {
+    position: absolute;
+    background: rgba(28, 28, 32, 0.62);
+    backdrop-filter: $glass-blur;
+    -webkit-backdrop-filter: $glass-blur;
+    transition:
+        transform 0.24s ease,
+        opacity 0.2s ease;
+
+    &.hidden {
+        opacity: 0;
+        pointer-events: none;
+    }
+}
+// Pin each dock edge, then slide off that same edge when hidden. The insets come
+// from a docked virtual keyboard (see index.scss) so the overlay bar stops short
+// of it rather than disappearing underneath (vkbd z-index 70 > bar 30).
+//
+// Bar `zoom` multiplies every length on the element, insets included, so a raw
+// dock inset would land at dock×scale. Dividing by --tabbar-zoom (set inline
+// next to the zoom itself) cancels that out and puts the bar exactly on the
+// keyboard's edge at any bar size.
+$inset-top: calc(var(--tabbar-inset-top, 0px) / var(--tabbar-zoom, 1));
+$inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
+
+.tabbar-strip.tabbar-autohide {
+    &.tabbar-top {
+        top: $inset-top;
+        left: 0;
+        right: 0;
+
+        &.hidden {
+            transform: translateY(-100%);
+        }
+    }
+    &.tabbar-bottom {
+        bottom: $inset-bottom;
+        left: 0;
+        right: 0;
+
+        &.hidden {
+            transform: translateY(100%);
+        }
+    }
+    &.tabbar-left {
+        top: $inset-top;
+        bottom: $inset-bottom;
+        left: 0;
+
+        &.hidden {
+            transform: translateX(-100%);
+        }
+    }
+    &.tabbar-right {
+        top: $inset-top;
+        bottom: $inset-bottom;
+        right: 0;
+
+        &.hidden {
+            transform: translateX(100%);
+        }
+    }
+}
+// Menu-mode FAB is already a floating fixed button (no layout space to reclaim);
+// auto-hide just fades + slides it toward its top-left corner.
+.tabbar-menu.tabbar-autohide {
+    transition:
+        transform 0.24s ease,
+        opacity 0.2s ease;
+
+    &.hidden {
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-130%, -20%);
+    }
 }
 
 // ── Tab chip (glass) ─────────────────────────────────────────────
@@ -518,6 +603,39 @@ $muted: rgba(255, 255, 255, 0.5);
     }
     .tabbar-check {
         font-size: 13px;
+    }
+}
+// Auto-hide + "only this session" toggle rows (in the options popover).
+.tabbar-toggle-row {
+    margin-top: 6px;
+
+    .tabbar-check {
+        font-size: 15px;
+        color: $muted;
+    }
+    .tabbar-toggle-label {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    }
+    &.active .tabbar-check {
+        color: $accent;
+    }
+    // The active namespace name shown next to "Only this session".
+    .tabbar-group-name {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        color: $accent-line;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
     }
 }
 .tabbar-pop-add {

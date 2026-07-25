@@ -24,6 +24,9 @@ export interface TabInfo {
     title: string; // label shown on the chip; updated from terminal title events
     search: string; // full WS query string incl. leading '?' (preserves routing)
     renamed?: boolean; // user renamed the tab — terminal title events no longer overwrite it
+    group: string; // entry namespace: the session name the page was opened with when
+    // this cluster of tabs was spawned. Lets the bar scope the list to "just this
+    // session" vs "all sessions". An entry tab's group equals its own session.
 }
 
 export interface BarState {
@@ -31,6 +34,8 @@ export interface BarState {
     menuMode: boolean; // collapsed to a single ☰ menu button
     scale?: number; // proportional zoom of the whole bar (1 = default)
     colWidth?: number; // column width (px) in left/right mode, drag-resizable
+    autoHide?: boolean; // hide the bar after a few idle seconds; reveal on edge-hover
+    showAllGroups?: boolean; // show every tab (all sessions) vs only the active tab's group
 }
 
 // Clamp for the drag-resizable column width (left/right mode). Wide enough to
@@ -131,8 +136,17 @@ export function nextSessionName(tabs: TabInfo[]): string {
     return `tab-${n}`;
 }
 
-export function makeTab(session: string, search: string, title?: string): TabInfo {
-    return { id: genTabId(), session, search, title: title || session };
+export function makeTab(session: string, search: string, title?: string, group?: string): TabInfo {
+    // An entry tab (opened directly from a URL) owns its own namespace, so group
+    // defaults to the session name. Sub-tabs pass the active namespace explicitly.
+    return { id: genTabId(), session, search, title: title || session, group: group || session };
+}
+
+// The tabs to show for the current view: everything when showAll, else only the
+// tabs belonging to `group` (the active tab's entry namespace).
+export function tabsInView(tabs: TabInfo[], group: string, showAll: boolean): TabInfo[] {
+    if (showAll) return tabs;
+    return tabs.filter(t => t.group === group);
 }
 
 // Active-tab persistence in the URL hash (`#tab=<id>`), so a reload lands on the
@@ -157,7 +171,14 @@ export function initialTabFromUrl(): TabInfo {
 }
 
 function defaultBar(): BarState {
-    return { position: 'top', menuMode: false, scale: 1, colWidth: COL_WIDTH_DEFAULT };
+    return {
+        position: 'top',
+        menuMode: false,
+        scale: 1,
+        colWidth: COL_WIDTH_DEFAULT,
+        autoHide: true,
+        showAllGroups: false,
+    };
 }
 
 export function loadTabsState(): TabsState {
@@ -178,12 +199,17 @@ export function loadTabsState(): TabsState {
     // and focused, so deep-links still land somewhere even with saved tabs.
     const bar: BarState = { ...defaultBar(), ...(saved.bar || {}) };
     bar.colWidth = clampColWidth(bar.colWidth ?? COL_WIDTH_DEFAULT);
+    // Tabs saved before namespacing existed have no group. They were one flat
+    // list, so fold them all into a single legacy group (the first tab's session)
+    // — that keeps them grouped together and visible, never scattered or hidden.
+    const legacyGroup = sanitizeName(saved.tabs[0]?.session || '') || 'main';
     const tabs: TabInfo[] = saved.tabs.map(t => ({
         id: t.id || genTabId(),
         session: t.session || sessionFromSearch(t.search || ''),
         search: t.search || `?arg=name:${t.session}`,
         title: t.title || t.session || 'shell',
         renamed: !!t.renamed,
+        group: t.group || legacyGroup,
     }));
 
     const urlSearch = window.location.search || '';

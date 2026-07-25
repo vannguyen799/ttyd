@@ -167,7 +167,10 @@ body {
 // The app is a flex box: the tab bar takes its intrinsic size on one edge and
 // the terminal stage fills the rest. Bar position decides the flex axis and
 // whether the bar comes before (top/left) or after (bottom/right) the stage.
+// `position: relative` only to be the containing block for the auto-hide tab
+// bar, which leaves the flow and pins itself to a window edge (tabs/style.scss).
 .app-root {
+    position: relative;
     height: 100%;
     display: flex;
     min-width: 0;
@@ -207,6 +210,15 @@ body.vkbd-docked-bottom .term-pane {
 }
 body.vkbd-docked-top .term-pane {
     top: var(--vkbd-dock-height, 0px);
+}
+
+// Same dock inset, published as inherited vars for the auto-hide tab bar: it
+// overlays the terminal, so it has to stop where the keyboard starts.
+body.vkbd-docked-bottom {
+    --tabbar-inset-bottom: var(--vkbd-dock-height, 0px);
+}
+body.vkbd-docked-top {
+    --tabbar-inset-top: var(--vkbd-dock-height, 0px);
 }
 
 .term-pane {

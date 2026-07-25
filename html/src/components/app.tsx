@@ -14,6 +14,7 @@ import {
     makeTab,
     nextSessionName,
     saveTabsState,
+    tabsInView,
 } from './tabs/model';
 
 import type { ITerminalOptions, ITheme } from '@xterm/xterm';
@@ -188,7 +189,10 @@ export class App extends Component<Record<string, never>, AppState> {
     private addTab() {
         const prev = this.state.activeId;
         const session = nextSessionName(this.state.tabs);
-        const tab = makeTab(session, `?arg=name:${session}`, session);
+        // A new tab joins the active tab's namespace so it stays visible under
+        // the current "only this session" scope.
+        const group = this.activeTab(this.state)?.group;
+        const tab = makeTab(session, `?arg=name:${session}`, session, group);
         this.scheduleSleep(prev);
         this.commit({
             ...this.state,
@@ -203,14 +207,20 @@ export class App extends Component<Record<string, never>, AppState> {
         const { tabs, activeId, live } = this.state;
         if (tabs.length <= 1) return; // never close the last tab
         const idx = tabs.findIndex(t => t.id === id);
+        const closing = tabs[idx];
         const nextTabs = tabs.filter(t => t.id !== id);
         this.cancelSleep(id);
         let nextLive = live.filter(x => x !== id);
         let nextActive = activeId;
         if (activeId === id) {
-            // Focus the neighbour (prefer the one to the left, Chrome-like).
-            const ni = Math.max(0, idx - 1);
-            nextActive = nextTabs[Math.min(ni, nextTabs.length - 1)].id;
+            // Focus the neighbour, but prefer one in the same namespace so a
+            // scoped view doesn't jump to another session; only when the group is
+            // now empty do we fall back to any remaining tab. Nearest-left wins,
+            // Chrome-like.
+            const sameGroup = nextTabs.filter(t => t.group === closing?.group);
+            const pool = sameGroup.length ? sameGroup : nextTabs;
+            const before = pool.filter(t => tabs.indexOf(t) < idx);
+            nextActive = (before.length ? before[before.length - 1] : pool[0]).id;
             nextLive = this.wake(nextLive, nextActive);
         }
         this.commit({ ...this.state, tabs: nextTabs, activeId: nextActive, live: nextLive });
@@ -274,26 +284,61 @@ export class App extends Component<Record<string, never>, AppState> {
         this.commit({ ...this.state, bar: { ...this.state.bar, colWidth } });
     }
 
+    @bind
+    private setBarAutoHide(autoHide: boolean) {
+        this.commit({ ...this.state, bar: { ...this.state.bar, autoHide } });
+        // Toggling this moves the bar in/out of the flex flow, so the stage gains
+        // or loses the bar's extent exactly once — refit the terminal to it. (While
+        // auto-hide is on the stage no longer changes as the bar slides, so there
+        // is nothing to refit per hide/reveal.)
+        const term = (window as unknown as { term?: { fit?: () => void } }).term;
+        if (term?.fit) {
+            requestAnimationFrame(() => {
+                try {
+                    term.fit!();
+                } catch {
+                    // ignore — the next resize/activation fits it
+                }
+            });
+        }
+    }
+
+    @bind
+    private setShowAll(showAllGroups: boolean) {
+        this.commit({ ...this.state, bar: { ...this.state.bar, showAllGroups } });
+    }
+
     render() {
         const { tabs, activeId, bar, live } = this.state;
         const active = this.activeTab(this.state);
+        const showAll = bar.showAllGroups ?? false;
+        // The namespace in view is the active tab's group; scope the strip to it
+        // unless "show all sessions" is on.
+        const group = active?.group ?? active?.session ?? '';
+        const visibleTabs = tabsInView(tabs, group, showAll);
         const rootClass = ['app-root', `bar-${bar.position}`, bar.menuMode ? 'bar-menu' : ''].filter(Boolean).join(' ');
         return (
             <div class={rootClass}>
                 <TabBar
-                    tabs={tabs}
+                    tabs={visibleTabs}
+                    totalTabs={tabs.length}
                     activeId={activeId}
                     liveIds={live}
                     position={bar.position}
                     menuMode={bar.menuMode}
                     scale={bar.scale ?? 1}
                     colWidth={bar.colWidth ?? 190}
+                    autoHide={bar.autoHide ?? false}
+                    showAllGroups={showAll}
+                    groupLabel={group}
                     onSelect={this.selectTab}
                     onClose={this.closeTab}
                     onAdd={this.addTab}
                     onSetMode={this.setBarMode}
                     onSetScale={this.setBarScale}
                     onSetColWidth={this.setBarColWidth}
+                    onSetAutoHide={this.setBarAutoHide}
+                    onSetShowAll={this.setShowAll}
                     onReorder={this.reorderTabs}
                     onRename={this.renameTab}
                 />
