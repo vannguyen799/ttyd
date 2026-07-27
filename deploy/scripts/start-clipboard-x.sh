@@ -29,6 +29,7 @@ DISPLAY_NUM="${TTYD_CLIP_DISPLAY:-:77}"
 PID_FILE="/tmp/ttyd-clipboard-x.pid"
 LOG_FILE="/tmp/ttyd-clipboard-x.log"
 SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
+LOCK_FILE="/tmp/.X${DISPLAY_NUM#:}-lock"
 
 if ! command -v Xvfb >/dev/null 2>&1; then
     echo "[clip-x] Xvfb not found — add pkgs.xorg.xorgserver to dev.nix" >&2
@@ -44,7 +45,7 @@ if [ -e "$SOCKET" ] && [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev
     echo "[clip-x] already running on $DISPLAY_NUM (PID $(cat "$PID_FILE"))"
     exit 0
 fi
-rm -f "$SOCKET" "$PID_FILE" 2>/dev/null
+rm -f "$SOCKET" "$PID_FILE" "$LOCK_FILE" 2>/dev/null
 
 # 1x1x24: nothing is ever drawn here, the display exists purely so an X
 # clipboard owner has a server to register with. Costs ~3 MB RSS.
