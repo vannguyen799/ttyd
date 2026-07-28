@@ -87,7 +87,7 @@ declare global {
 // then goes to sleep — its WebSocket and WebGL context are released. Switching
 // back wakes it and reconnects; the tmux session persists on the host the whole
 // time, so the screen just redraws with nothing lost.
-const SLEEP_MS = 30000;
+const SLEEP_MS = 180000;
 
 interface AppState extends TabsState {
     // Tab ids that currently have a live Terminal (the active tab plus any
@@ -143,7 +143,7 @@ export class App extends Component<Record<string, never>, AppState> {
         }
     }
 
-    // Arm the 30s sleep for a tab that just lost focus. Fires unless the tab is
+    // Arm the sleep timer for a tab that just lost focus. Fires unless the tab is
     // re-activated (or already gone) by the time it elapses.
     private scheduleSleep(id: string) {
         this.cancelSleep(id);
@@ -182,7 +182,7 @@ export class App extends Component<Record<string, never>, AppState> {
         if (id === this.state.activeId) return;
         const prev = this.state.activeId;
         const live = this.wake(this.state.live, id);
-        this.scheduleSleep(prev); // keep the tab we're leaving warm for 30s
+        this.scheduleSleep(prev); // keep the tab we're leaving warm for SLEEP_MS
         this.commit({ ...this.state, activeId: id, live });
     }
 

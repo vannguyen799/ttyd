@@ -280,8 +280,8 @@ export class Xterm {
         this.disposables.length = 0;
     }
 
-    // Full teardown for when a tab is put to sleep (unmounted after 30s
-    // inactive): close the socket and dispose the xterm instance so the
+    // Full teardown for when a tab is put to sleep (unmounted after its warm
+    // window elapses): close the socket and dispose the xterm instance so the
     // WebSocket, its WebGL context and DOM are all released. dispose() alone —
     // used on reconnect — deliberately keeps the socket and terminal alive, so
     // sleeping needs this stronger path. The tmux session lives on the host, so
