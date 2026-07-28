@@ -1,0 +1,39 @@
+# ttyd web terminal — systemd unit template.
+#
+# Install it with deploy/scripts/install-systemd.sh, which substitutes the
+# @PLACEHOLDER@ values for this host and writes the result to
+# /etc/systemd/system/ttyd.service. Editing that copy directly is fine; rerun
+# the installer to regenerate it.
+#
+# One process serves everything: the vkbd UI baked into src/html.h, the
+# terminal WebSocket and /clipboard-image. There is no webpack proxy and no
+# Node runtime in the deployment.
+
+[Unit]
+Description=ttyd web terminal (UI + WebSocket + image paste, one process)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@FORK_ROOT@
+Environment=HOME=@HOME@
+# Port, credentials, bind address and the bare-URL session args live here so a
+# restart never changes them. The leading "-" keeps the unit valid if it's gone.
+EnvironmentFile=-@ENV_FILE@
+ExecStart=@FORK_ROOT@/deploy/scripts/start-ttyd.sh --foreground
+
+# The whole point of this deployment is that terminal sessions outlive the
+# server: the script starts a tmux server and the headless X clipboard, and
+# both land in this unit's cgroup. Under the default KillMode=control-group,
+# `systemctl restart ttyd` would take every tmux session down with it — losing
+# exactly the work the browser reconnects to. KillMode=process signals only
+# ttyd itself and leaves the rest of the cgroup running.
+KillMode=process
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
