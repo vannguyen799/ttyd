@@ -2,11 +2,16 @@
 #include <string.h>
 #include <zlib.h>
 
+#include "clipboard.h"
 #include "html.h"
 #include "server.h"
 #include "utils.h"
 
 enum { AUTH_OK, AUTH_FAIL, AUTH_ERROR };
+
+// Cap on an accepted paste. Screenshots are far below this; the limit exists
+// because the handler sits on the same port as the terminal.
+#define MAX_IMAGE_BYTES (12 * 1024 * 1024)
 
 static char *html_cache = NULL;
 static size_t html_cache_len = 0;
@@ -83,6 +88,44 @@ static void pss_buffer_free(struct pss_http *pss) {
   if (pss->buffer != (char *)index_html && pss->buffer != html_cache) free(pss->buffer);
 }
 
+// Queue the JSON answer to a /clipboard-image POST. The message ends up
+// inside a JSON string and part of it comes from xclip, so strip anything
+// that would break out of the quotes.
+static void clipboard_result(struct pss_http *pss, int status, const char *error) {
+  size_t i = 0;
+  if (error != NULL) {
+    for (; error[i] != '\0' && i < sizeof(pss->clip_error) - 1; i++) {
+      char c = error[i];
+      pss->clip_error[i] = (c == '"' || c == '\\' || (unsigned char)c < 0x20) ? ' ' : c;
+    }
+  }
+  pss->clip_error[i] = '\0';
+
+  pss->clip_status = status;
+  pss->clip_reply = true;
+  lws_callback_on_writable(pss->wsi);
+}
+
+static void clipboard_done(void *ctx, int status, const char *error) {
+  struct pss_http *pss = (struct pss_http *)ctx;
+
+  pss->clip = NULL;
+  clipboard_result(pss, status == 0 ? HTTP_STATUS_OK : HTTP_STATUS_INTERNAL_SERVER_ERROR, error);
+}
+
+static void clipboard_reset(struct pss_http *pss) {
+  if (pss->clip != NULL) {
+    clipboard_detach(pss->clip);
+    pss->clip = NULL;
+  }
+  free(pss->body);
+  pss->body = NULL;
+  pss->body_len = 0;
+  pss->body_too_large = false;
+  pss->clip_request = false;
+  pss->clip_reply = false;
+}
+
 static void access_log(struct lws *wsi, const char *path) {
   char rip[50];
 
@@ -100,6 +143,8 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
     case LWS_CALLBACK_HTTP:
       access_log(wsi, (const char *)in);
       snprintf(pss->path, sizeof(pss->path), "%s", (const char *)in);
+      pss->wsi = wsi;
+      clipboard_reset(pss);  // the connection may be reused across requests
       switch (check_auth(wsi, pss)) {
         case AUTH_OK:
           break;
@@ -128,6 +173,20 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         pss->len = n;
         lws_callback_on_writable(wsi);
         break;
+      }
+
+      // Image paste bridge. A browser tab can't reach the host clipboard, so
+      // the UI POSTs the pasted image here; we load it into the clipboard of
+      // the headless X display and the client then sends a real Ctrl+V, which
+      // the foreground TUI handles as a native paste.
+      if (strcmp(pss->path, endpoints.clipboard) == 0) {
+        if (lws_hdr_total_length(wsi, WSI_TOKEN_POST_URI) == 0) {
+          lws_return_http_status(wsi, HTTP_STATUS_METHOD_NOT_ALLOWED, NULL);
+          goto try_to_reuse;
+        }
+        // Answer from LWS_CALLBACK_HTTP_BODY_COMPLETION, once xclip has it.
+        pss->clip_request = true;
+        return 0;
       }
 
       // redirects `/base-path` to `/base-path/`
@@ -179,7 +238,75 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       }
       break;
 
+    case LWS_CALLBACK_HTTP_BODY:
+      // lws signals a bodyless POST with a zero-length chunk and a NULL `in`.
+      if (!pss->clip_request || pss->body_too_large || len == 0) break;
+
+      // Overshooting the cap discards what was buffered: the body is useless
+      // now, and holding it would let a single request pin the memory until
+      // the client finishes uploading.
+      if (pss->body_len + len > MAX_IMAGE_BYTES) {
+        pss->body_too_large = true;
+        free(pss->body);
+        pss->body = NULL;
+        pss->body_len = 0;
+        break;
+      }
+
+      pss->body = xrealloc(pss->body, pss->body_len + len);
+      memcpy(pss->body + pss->body_len, in, len);
+      pss->body_len += len;
+      break;
+
+    case LWS_CALLBACK_HTTP_BODY_COMPLETION:
+      if (!pss->clip_request) goto try_to_reuse;
+
+      if (pss->body_too_large) {
+        clipboard_result(pss, HTTP_STATUS_REQ_ENTITY_TOO_LARGE, "image too large");
+      } else if (pss->body_len == 0) {
+        clipboard_result(pss, HTTP_STATUS_BAD_REQUEST, "empty body");
+      } else {
+        int err = 0;
+        char *data = pss->body;
+        size_t data_len = pss->body_len;
+        pss->body = NULL;  // ownership passes to the clipboard request
+        pss->body_len = 0;
+
+        pss->clip = clipboard_set_image(server->loop, data, data_len, clipboard_done, pss, &err);
+        if (pss->clip == NULL)
+          clipboard_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                           err == UV_ENOENT ? "xclip not installed" : uv_strerror(err));
+      }
+      return 0;
+
+    case LWS_CALLBACK_CLOSED_HTTP:
+      clipboard_reset(pss);
+      break;
+
     case LWS_CALLBACK_HTTP_WRITEABLE:
+      if (pss->clip_reply) {
+        pss->clip_reply = false;
+        pss->clip_request = false;
+
+        size_t n = pss->clip_status == HTTP_STATUS_OK
+                       ? (size_t)snprintf(buf, sizeof(buf), "{\"ok\": true}")
+                       : (size_t)snprintf(buf, sizeof(buf), "{\"error\": \"%s\"}", pss->clip_error);
+
+        p = buffer + LWS_PRE;
+        end = p + sizeof(buffer) - LWS_PRE;
+        if (lws_add_http_header_status(wsi, (unsigned int)pss->clip_status, &p, end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
+                                         (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
+            lws_add_http_header_content_length(wsi, (unsigned long)n, &p, end) ||
+            lws_finalize_http_header(wsi, &p, end) ||
+            lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
+          return 1;
+
+        pss->buffer = pss->ptr = strdup(buf);
+        pss->len = n;
+        // fall through to write the body out below
+      }
+
       if (!pss->buffer || pss->len == 0) {
         goto try_to_reuse;
       }

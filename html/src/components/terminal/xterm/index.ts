@@ -137,6 +137,7 @@ export interface FlowControl {
 export interface XtermOptions {
     wsUrl: string;
     tokenUrl: string;
+    clipboardUrl: string;
     flowControl: FlowControl;
     clientOptions: ClientOptions;
     termOptions: ITerminalOptions;
@@ -654,7 +655,7 @@ export class Xterm {
         try {
             overlayAddon?.showOverlay('🖼 …', 2000);
             const png = await toPngBlob(src);
-            const resp = await fetch('/clipboard-image', {
+            const resp = await fetch(this.options.clipboardUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'image/png',

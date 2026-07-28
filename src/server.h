@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <uv.h>
 
+#include "clipboard.h"
 #include "pty.h"
 
 // client message
@@ -22,6 +23,7 @@ struct endpoints {
   char *index;
   char *token;
   char *parent;
+  char *clipboard;
 };
 
 extern volatile bool force_exit;
@@ -34,6 +36,18 @@ struct pss_http {
   char *buffer;
   char *ptr;
   size_t len;
+
+  // /clipboard-image: the POST body is accumulated here, handed to xclip, and
+  // answered from a libuv callback — hence the stored wsi to wake writes on.
+  struct lws *wsi;
+  bool clip_request;
+  char *body;
+  size_t body_len;
+  bool body_too_large;
+  clipboard_req *clip;
+  bool clip_reply;
+  int clip_status;
+  char clip_error[128];
 };
 
 struct pss_tty {
