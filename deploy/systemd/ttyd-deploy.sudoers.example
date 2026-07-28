@@ -1,0 +1,36 @@
+# Narrow sudo rights for operating the ttyd service.
+#
+# Install it (as root), then check the whole sudoers set still parses — a
+# broken file locks everyone out of sudo, so never skip the second command:
+#
+#   install -m 0440 -o root -g root \
+#       deploy/systemd/ttyd-deploy.sudoers.example /etc/sudoers.d/ttyd-deploy
+#   visudo -c
+#
+# Replace "dev" below if a different user owns the checkout.
+#
+# Scope: restart the already-installed service, nothing else. What the service
+# runs is fixed by /etc/systemd/system/ttyd.service and /etc/default/ttyd, both
+# root-owned, so these rights grant no path to root.
+#
+# Deliberately NOT here: install-systemd.sh. It lives in a checkout the same
+# user can write, and NOPASSWD on a user-writable script is NOPASSWD on
+# whatever that user later puts in it — full root by another name. Installing
+# or reinstalling the unit stays a deliberate, password-authenticated act.
+#
+# Also not here: journalctl. Under sudo it pages through less, whose `!cmd`
+# escape would hand out a root shell. Read the log without sudo instead:
+#
+#   usermod -aG systemd-journal dev     # then log in again
+#   journalctl -u ttyd -f
+
+Cmnd_Alias TTYD_SVC = /usr/bin/systemctl start ttyd.service, \
+                      /usr/bin/systemctl stop ttyd.service, \
+                      /usr/bin/systemctl restart ttyd.service, \
+                      /usr/bin/systemctl try-restart ttyd.service, \
+                      /usr/bin/systemctl start ttyd, \
+                      /usr/bin/systemctl stop ttyd, \
+                      /usr/bin/systemctl restart ttyd, \
+                      /usr/bin/systemctl try-restart ttyd
+
+dev ALL=(root) NOPASSWD: TTYD_SVC

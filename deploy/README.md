@@ -160,6 +160,25 @@ Two things worth knowing:
   nobody would ever see it. Set `TTYD_PASSWORD` in the environment file (the
   installer does) or run with `-n`.
 
+### Restarting without a password
+
+Rebuilding `html/` means restarting the service, which otherwise asks for a
+sudo password every time. `deploy/systemd/ttyd-deploy.sudoers.example` grants
+exactly that and nothing else:
+
+```bash
+sudo install -m 0440 -o root -g root \
+    deploy/systemd/ttyd-deploy.sudoers.example /etc/sudoers.d/ttyd-deploy
+sudo visudo -c        # never skip: a broken sudoers file locks out sudo
+```
+
+It covers `systemctl start|stop|restart|try-restart ttyd` for the checkout's
+owner. It deliberately leaves out the installer — that script sits in a
+directory the same user can write, so a NOPASSWD rule on it would be a
+NOPASSWD rule on anything they later put in the file. For logs, add the user
+to `systemd-journal` rather than putting `journalctl` behind sudo, where its
+pager's `!cmd` escape would hand out a root shell.
+
 The installer also retires the old two-process deployment if it finds it
 (`ttyd-backend.service` on `:7681` plus `ttyd-ui.service` running webpack on
 the public port). It stops them without taking their cgroup — and therefore
@@ -537,7 +556,8 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     │   └── tmux-persist.conf # resurrect + continuum settings (sourced by ~/.tmux.conf)
     ├── systemd/
     │   ├── ttyd.service      # Unit template (@PLACEHOLDER@s filled in at install)
-    │   └── ttyd.env.example  # Seed for /etc/default/ttyd (port, creds, landing session)
+    │   ├── ttyd.env.example  # Seed for /etc/default/ttyd (port, creds, landing session)
+    │   └── ttyd-deploy.sudoers.example # Password-free `systemctl restart ttyd`, nothing more
     ├── scripts/
     │   ├── setup-ubuntu-vps.sh # One-shot build + install + start on a fresh VPS
     │   ├── install-systemd.sh # Install the unit; retire the old two-process setup
