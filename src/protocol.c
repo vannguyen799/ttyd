@@ -184,15 +184,23 @@ static void wsi_output(struct lws *wsi, pty_buf_t *buf) {
   free(message);
 }
 
+// Gate the WebSocket upgrade.
+//
+// Basic-auth mode deliberately does *not* require the Authorization header
+// here. WebKit (Safari/iOS) never sends that header on a WebSocket upgrade,
+// even once the user has passed the Basic Auth dialog, so enforcing it at the
+// handshake locks out every iPhone/iPad client with an unexplained
+// ECONNRESET.
+//
+// The credential is still mandatory — the AuthToken message is the real gate:
+// callback_tty rejects every command other than JSON_DATA while
+// pss->authenticated is false, and the JSON_DATA handler closes the
+// connection unless AuthToken equals server->credential. An unauthenticated
+// peer can therefore complete the handshake and do nothing else. The one cost
+// is that such a peer briefly occupies a --max-clients slot.
 static bool check_auth(struct lws *wsi, struct pss_tty *pss) {
   if (server->auth_header != NULL) {
     return lws_hdr_custom_copy(wsi, pss->user, sizeof(pss->user), server->auth_header, strlen(server->auth_header)) > 0;
-  }
-
-  if (server->credential != NULL) {
-    char buf[256];
-    size_t n = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    return n >= 7 && strstr(buf, "Basic ") && !strcmp(buf + 6, server->credential);
   }
 
   return true;
