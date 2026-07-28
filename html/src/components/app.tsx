@@ -189,10 +189,13 @@ export class App extends Component<Record<string, never>, AppState> {
     @bind
     private addTab() {
         const prev = this.state.activeId;
-        const session = nextSessionName(this.state.tabs);
         // A new tab joins the active tab's namespace so it stays visible under
-        // the current "only this session" scope.
-        const group = this.activeTab(this.state)?.group;
+        // the current "only this session" scope, and is named after that
+        // namespace's default session (main-2, main-3, …) rather than a generic
+        // tab-N, so the chip says which session it belongs to.
+        const active = this.activeTab(this.state);
+        const group = active?.group;
+        const session = nextSessionName(this.state.tabs, group || active?.session);
         const tab = makeTab(session, `?arg=name:${session}`, session, group);
         this.scheduleSleep(prev);
         this.commit({

@@ -126,14 +126,17 @@ export function genTabId(): string {
     return `t${t}_${idCounter}`;
 }
 
-// Pick a fresh session name not already used by an open tab: tab-2, tab-3, …
-// (tab-1 is reserved for the default first tab so the numbering reads naturally
-// even when the first tab is the default "main").
-export function nextSessionName(tabs: TabInfo[]): string {
+// Pick a fresh session name not already used by an open tab, derived from the
+// namespace's own default session name: main-2, main-3, … for a "main" entry,
+// work-2, work-3, … for a "work" one. The base itself is the first tab, so the
+// numbering starts at 2 and reads naturally. Falls back to "main" when no base
+// is known (e.g. a legacy tab list with no group).
+export function nextSessionName(tabs: TabInfo[], base?: string): string {
+    const root = sanitizeName(base || '') || 'main';
     const used = new Set(tabs.map(t => t.session));
     let n = 2;
-    while (used.has(`tab-${n}`)) n++;
-    return `tab-${n}`;
+    while (used.has(`${root}-${n}`)) n++;
+    return `${root}-${n}`;
 }
 
 export function makeTab(session: string, search: string, title?: string, group?: string): TabInfo {
