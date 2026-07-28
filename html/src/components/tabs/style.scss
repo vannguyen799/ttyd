@@ -340,6 +340,12 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
         flex: 1 1 auto;
         min-width: 0;
         width: 100%;
+        // The bar sets user-select:none so chips don't select on a drag; WebKit
+        // extends that to descendant inputs and makes them uneditable, so the
+        // rename box has to opt back in.
+        user-select: text;
+        -webkit-user-select: text;
+        touch-action: manipulation;
         padding: 2px 6px;
         background: rgba(0, 0, 0, 0.35);
         border: 1px solid $accent-line;

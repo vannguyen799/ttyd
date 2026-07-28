@@ -39,6 +39,12 @@ interface State {
 // Pointer travel (px) before a press on a chip becomes a drag rather than a tap.
 const DRAG_THRESHOLD = 6;
 
+// Press-and-hold on a chip opens the inline rename. Double-click stays the
+// desktop gesture, but on touch a double-tap is unreliable (the first tap has
+// already switched tabs, and the browser may swallow the second as a zoom), so
+// hold is the gesture that actually works on a phone.
+const LONG_PRESS_MS = 450;
+
 // Auto-hide timing. Collapse after this long with the pointer off the bar…
 const AUTO_HIDE_MS = 2000;
 // …and reveal only after the pointer dwells this long inside the edge zone, so a
@@ -80,6 +86,7 @@ export class TabBar extends Component<Props, State> {
         window.removeEventListener('pointermove', this.onWinMove, true);
         this.clearHideTimer();
         this.clearRevealTimer();
+        this.clearPress();
     }
 
     componentDidUpdate(prev: Props, prevState: State) {
@@ -250,10 +257,34 @@ export class TabBar extends Component<Props, State> {
         }
     };
 
+    // Press-and-hold timer (rename gesture), armed on every chip press.
+    private pressTimer: number | null = null;
+
+    private clearPress() {
+        if (this.pressTimer !== null) {
+            window.clearTimeout(this.pressTimer);
+            this.pressTimer = null;
+        }
+    }
+
+    private armPress(id: string) {
+        this.clearPress();
+        this.pressTimer = window.setTimeout(() => {
+            this.pressTimer = null;
+            const t = this.props.tabs.find(x => x.id === id);
+            if (!t) return;
+            // The press has become a rename: the release must not also select
+            // (switch to) the tab, so swallow the click that follows.
+            this.suppressClickId = id;
+            this.startRename(t);
+        }, LONG_PRESS_MS);
+    }
+
     private onChipPointerDown = (id: string, e: PointerEvent) => {
         if (this.state.editingId) return; // no dragging while renaming
         if ((e.target as Element)?.closest?.('.tab-close')) return; // let close fire
         this.drag = { pointerId: e.pointerId, id, startX: e.clientX, startY: e.clientY, active: false };
+        this.armPress(id);
     };
 
     private onChipPointerMove = (e: PointerEvent) => {
@@ -261,6 +292,7 @@ export class TabBar extends Component<Props, State> {
         if (!d || d.pointerId !== e.pointerId) return;
         if (!d.active) {
             if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return;
+            this.clearPress(); // moved: this is a drag/scroll, not a hold
             d.active = true;
             this.setState({ dragId: d.id });
             try {
@@ -277,6 +309,7 @@ export class TabBar extends Component<Props, State> {
     };
 
     private onChipPointerUp = (e: PointerEvent) => {
+        this.clearPress();
         const d = this.drag;
         if (!d || d.pointerId !== e.pointerId) return;
         this.drag = null;
@@ -301,6 +334,7 @@ export class TabBar extends Component<Props, State> {
     };
 
     private startRename = (t: TabInfo) => {
+        this.clearPress();
         this.drag = null;
         this.setState({ editingId: t.id, editValue: t.title || t.session });
     };
@@ -462,7 +496,7 @@ export class TabBar extends Component<Props, State> {
                         ? undefined
                         : asleep
                         ? `${t.session} — sleeping (click to reconnect)`
-                        : `${t.session} — double-click to rename`
+                        : `${t.session} — double-click or press-and-hold to rename`
                 }
                 onClick={() => this.onChipClick(t.id, inMenu)}
                 onDblClick={() => this.startRename(t)}
@@ -470,6 +504,9 @@ export class TabBar extends Component<Props, State> {
                 onPointerMove={this.onChipPointerMove}
                 onPointerUp={this.onChipPointerUp}
                 onPointerCancel={this.onChipPointerUp}
+                // A hold is the rename gesture, so don't let it raise the native
+                // long-press menu on touch.
+                onContextMenu={e => e.preventDefault()}
             >
                 <span class="tab-dot" aria-hidden="true" />
                 {editing ? (
