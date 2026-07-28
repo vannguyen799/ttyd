@@ -13,7 +13,9 @@
 #   -u, --username USERNAME    Set username (default: user)
 #   -b, --bind ADDRESS         Address to bind (default: 0.0.0.0)
 #   -n, --no-auth              Disable authentication
+#   -F, --foreground           Run ttyd in the foreground (for systemd)
 #   -h, --help                 Show this help
+#   -- ARG...                  Default wrapper args for a bare URL
 #
 # Environment variables:
 #   TTYD_PASSWORD              Terminal password (overridden by -p)
@@ -21,6 +23,7 @@
 #   TTYD_PORT                  Port (overridden by -P)
 #   TTYD_BIND                  Bind address (overridden by -b)
 #   TTYD_BIN                   ttyd binary to run (default: the fork's build)
+#   TTYD_SESSION_ARGS          Default wrapper args (overridden by -- ARG...)
 # ══════════════════════════════════════════════════════════════
 
 PIDFILE_TTYD="/tmp/ttyd.pid"
@@ -59,13 +62,27 @@ PORT="${TTYD_PORT:-${TTYD_UI_PORT:-10090}}"
 BIND="${TTYD_BIND:-0.0.0.0}"
 USERNAME="${TTYD_USERNAME:-user}"
 PASSWORD="${TTYD_PASSWORD:-$(generate_password)}"
+# Whether the password was chosen rather than generated. A service must not get
+# a fresh random password on every restart, so foreground mode insists on one.
+PASSWORD_SET=false
+[ -n "${TTYD_PASSWORD:-}" ] && PASSWORD_SET=true
 NO_AUTH=false
+FOREGROUND=false
+
+# Wrapper args used when the URL carries none of its own (?arg=...). The UI
+# sends per-tab args, so these only decide what a bare "/" opens — which is how
+# a service pins the deployment's home session.
+SESSION_ARGS=()
+if [ -n "${TTYD_SESSION_ARGS:-}" ]; then
+    read -r -a SESSION_ARGS <<< "$TTYD_SESSION_ARGS"
+fi
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -p|--password)
             PASSWORD="$2"
+            PASSWORD_SET=true
             shift 2
             ;;
         -P|--port)
@@ -84,6 +101,15 @@ while [[ $# -gt 0 ]]; do
             NO_AUTH=true
             shift
             ;;
+        -F|--foreground)
+            FOREGROUND=true
+            shift
+            ;;
+        --)
+            shift
+            SESSION_ARGS=("$@")
+            break
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -93,7 +119,9 @@ while [[ $# -gt 0 ]]; do
             echo "  -u, --username USERNAME    Set username (default: user)"
             echo "  -b, --bind ADDRESS         Address to bind (default: 0.0.0.0)"
             echo "  -n, --no-auth              Disable authentication"
+            echo "  -F, --foreground           Run ttyd in the foreground (for systemd)"
             echo "  -h, --help                 Show this help"
+            echo "  -- ARG...                  Default wrapper args for a bare URL"
             echo ""
             echo "Examples:"
             echo "  $0                         # Local with random password"
@@ -101,9 +129,11 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 -n                      # No authentication"
             echo "  $0 -u admin -p secret123   # Custom user/pass"
             echo "  $0 -b 127.0.0.1            # Reachable only through a local proxy/tunnel"
+            echo "  $0 -F -- name:main codex   # Foreground, bare URL opens tmux \"main\" + codex"
             echo ""
             echo "Environment variables:"
-            echo "  TTYD_PASSWORD, TTYD_USERNAME, TTYD_PORT, TTYD_BIND, TTYD_BIN"
+            echo "  TTYD_PASSWORD, TTYD_USERNAME, TTYD_PORT, TTYD_BIND, TTYD_BIN,"
+            echo "  TTYD_SESSION_ARGS"
             exit 0
             ;;
         *)
@@ -113,6 +143,14 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# A generated password is fine for an interactive start — it is printed right
+# there — but a service would mint a new one on every restart and nobody would
+# ever see it. Make the caller supply one instead of failing silently later.
+if [ "$FOREGROUND" = true ] && [ "$NO_AUTH" = false ] && [ "$PASSWORD_SET" = false ]; then
+    echo "Error: --foreground needs a fixed password: pass -p, set TTYD_PASSWORD, or use -n." >&2
+    exit 1
+fi
 
 # Check and install package via nix-env if not found.
 #
@@ -253,6 +291,53 @@ else
     echo -e "${YELLOW}⚠ clipboard bridge unavailable — image paste will be disabled${NC}"
 fi
 
+print_banner() {
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  WEB TERMINAL READY${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    echo -e "  ${CYAN}URL:${NC} http://localhost:$PORT"
+    echo ""
+    echo -e "  ${CYAN}Session routing (auto-attach):${NC}"
+    echo -e "    default (tmux main):   http://localhost:$PORT/"
+    echo -e "    tmux <name>:           http://localhost:$PORT/?arg=<name>"
+    echo -e "    screen <name>:         http://localhost:$PORT/?arg=screen&arg=<name>"
+    echo -e "  ${CYAN}Modifiers (stack before session spec):${NC}"
+    echo -e "    cwd:<path>             chdir before launch"
+    echo -e "    codex                  run \`codex\` (no args) on first-create"
+    echo -e "    codex:<args>           run \`codex <args>\` on first-create"
+    echo -e "    claude                 run \`claude\` (no args) on first-create"
+    echo -e "    claude:<args>          run \`claude <args>\` on first-create"
+    echo -e "    e.g.  http://localhost:$PORT/?arg=cwd:/home/user/MetrixCRM&arg=codex&arg=crm"
+    if [ ${#SESSION_ARGS[@]} -gt 0 ]; then
+        echo -e "  ${CYAN}Bare-URL default:${NC} ${SESSION_ARGS[*]}"
+    fi
+
+    echo ""
+    if [ "$NO_AUTH" = true ]; then
+        echo -e "  ${CYAN}Auth:${NC} ${YELLOW}Disabled (open access)${NC}"
+    else
+        echo -e "  ${CYAN}Username:${NC} $USERNAME"
+        # Under a service this line goes to the journal, so print where the
+        # password came from rather than the password itself.
+        if [ "$FOREGROUND" = true ]; then
+            echo -e "  ${CYAN}Password:${NC} (as configured)"
+        else
+            echo -e "  ${CYAN}Password:${NC} $PASSWORD"
+        fi
+    fi
+
+    echo ""
+    if [ "$FOREGROUND" = true ]; then
+        echo -e "  Stop: ${CYAN}systemctl stop ttyd${NC} (if run as the packaged service)"
+    else
+        echo -e "  Stop: ${CYAN}bash $SCRIPT_DIR/stop-ttyd.sh${NC}"
+    fi
+    echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+}
+
 # ── xterm.js client options ────────────────────────────────────
 # Ayu Dark palette — matches the integrated terminal in VSCode Ayu.
 TTYD_THEME='{"background":"#181818","foreground":"#BFBDB6","cursor":"#E6B450","cursorAccent":"#181818","selectionBackground":"#409FFF4D","black":"#11131A","red":"#D95757","green":"#7FD962","yellow":"#E6B450","blue":"#59C2FF","magenta":"#D2A6FF","cyan":"#95E6CB","white":"#C7C7C7","brightBlack":"#686868","brightRed":"#F07178","brightGreen":"#AAD94C","brightYellow":"#FFB454","brightBlue":"#59C2FF","brightMagenta":"#D2A6FF","brightCyan":"#95E6CB","brightWhite":"#FFFFFF"}'
@@ -285,14 +370,21 @@ COMMON_OPTS=(-p "$PORT" -i "$BIND" -W -a
 CRED_FILE="/tmp/ttyd.cred"
 if [ "$NO_AUTH" = true ]; then
     rm -f "$CRED_FILE"
-    "$TTYD_BIN" "${COMMON_OPTS[@]}" "$SESSION_WRAPPER" &
-    AUTH_MSG="None (open access)"
 else
     printf '%s' "$USERNAME:$PASSWORD" | base64 -w0 > "$CRED_FILE"
     chmod 600 "$CRED_FILE"
-    "$TTYD_BIN" "${COMMON_OPTS[@]}" -c "$USERNAME:$PASSWORD" "$SESSION_WRAPPER" &
-    AUTH_MSG="$USERNAME / $PASSWORD"
+    COMMON_OPTS+=(-c "$USERNAME:$PASSWORD")
 fi
+
+# Foreground mode: ttyd replaces this shell, so there is no pid to record and
+# no post-start check to run — print the banner first, then hand over. systemd
+# supervises the process from there, and its journal keeps ttyd's own output.
+if [ "$FOREGROUND" = true ]; then
+    print_banner
+    exec "$TTYD_BIN" "${COMMON_OPTS[@]}" "$SESSION_WRAPPER" "${SESSION_ARGS[@]}"
+fi
+
+"$TTYD_BIN" "${COMMON_OPTS[@]}" "$SESSION_WRAPPER" "${SESSION_ARGS[@]}" &
 echo $! > $PIDFILE_TTYD
 sleep 2
 
@@ -303,34 +395,4 @@ if ! kill -0 $(cat $PIDFILE_TTYD) 2>/dev/null; then
 fi
 echo -e "${GREEN}✓ ttyd started ($BIND:$PORT) — UI, WebSocket and image paste all in one process${NC}"
 
-echo ""
-echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  WEB TERMINAL READY${NC}"
-echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
-echo ""
-
-echo -e "  ${CYAN}URL:${NC} http://localhost:$PORT"
-echo ""
-echo -e "  ${CYAN}Session routing (auto-attach):${NC}"
-echo -e "    default (tmux main):   http://localhost:$PORT/"
-echo -e "    tmux <name>:           http://localhost:$PORT/?arg=<name>"
-echo -e "    screen <name>:         http://localhost:$PORT/?arg=screen&arg=<name>"
-echo -e "  ${CYAN}Modifiers (stack before session spec):${NC}"
-echo -e "    cwd:<path>             chdir before launch"
-echo -e "    codex                  run \`codex\` (no args) on first-create"
-echo -e "    codex:<args>           run \`codex <args>\` on first-create"
-echo -e "    claude                 run \`claude\` (no args) on first-create"
-echo -e "    claude:<args>          run \`claude <args>\` on first-create"
-echo -e "    e.g.  http://localhost:$PORT/?arg=cwd:/home/user/MetrixCRM&arg=codex&arg=crm"
-
-echo ""
-if [ "$NO_AUTH" = true ]; then
-    echo -e "  ${CYAN}Auth:${NC} ${YELLOW}Disabled (open access)${NC}"
-else
-    echo -e "  ${CYAN}Username:${NC} $USERNAME"
-    echo -e "  ${CYAN}Password:${NC} $PASSWORD"
-fi
-
-echo ""
-echo -e "  Stop: ${CYAN}bash $SCRIPT_DIR/stop-ttyd.sh${NC}"
-echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
+print_banner
