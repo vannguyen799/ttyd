@@ -125,6 +125,48 @@ bash deploy/scripts/stop-ttyd.sh
 
 ---
 
+## Run as a Service (systemd)
+
+`start-ttyd.sh` is meant to be run by hand. To have the terminal come back on
+boot, install it as a unit:
+
+```bash
+sudo bash deploy/scripts/install-systemd.sh
+```
+
+That renders `deploy/systemd/ttyd.service` for this host (user = whoever owns
+the checkout), seeds `/etc/default/ttyd` from
+`deploy/systemd/ttyd.env.example` with a generated password, then enables and
+starts it. The unit runs `start-ttyd.sh --foreground`, so the service and a
+manual start share one code path — same flags, same clipboard bridge, same
+tmux persistence.
+
+```bash
+systemctl status ttyd          # is it up
+journalctl -u ttyd -f          # what it is doing
+sudoedit /etc/default/ttyd     # port, credentials, bind address, landing session
+systemctl restart ttyd         # apply
+```
+
+Two things worth knowing:
+
+- **`KillMode=process` is load-bearing.** The terminal's tmux server is
+  started by the service, so it lives in the service's cgroup. Under systemd's
+  default `KillMode=control-group`, `systemctl restart ttyd` would kill every
+  live session — the exact work the browser reconnects to. Signalling only ttyd
+  keeps sessions running across restarts and upgrades.
+- **The password must be fixed.** `--foreground` refuses to start with a
+  generated one: a service would mint a new password on every restart and
+  nobody would ever see it. Set `TTYD_PASSWORD` in the environment file (the
+  installer does) or run with `-n`.
+
+The installer also retires the old two-process deployment if it finds it
+(`ttyd-backend.service` on `:7681` plus `ttyd-ui.service` running webpack on
+the public port). It stops them without taking their cgroup — and therefore
+your tmux sessions — down, and removes their private launcher scripts.
+
+---
+
 ## Options
 
 | Option | Description | Default |
@@ -134,6 +176,8 @@ bash deploy/scripts/stop-ttyd.sh
 | `-u, --username` | Set username | user |
 | `-b, --bind` | Address to bind | 0.0.0.0 |
 | `-n, --no-auth` | Disable authentication | false |
+| `-F, --foreground` | Run ttyd in the foreground (systemd `Type=simple`) | false |
+| `-- ARG...` | Wrapper args for a bare URL (no `?arg=`) | none |
 | `-h, --help` | Show help | - |
 
 ### Environment Variables
@@ -146,6 +190,7 @@ bash deploy/scripts/stop-ttyd.sh
 | `TTYD_BIND` | Bind address (default 0.0.0.0) |
 | `TTYD_BIN` | ttyd binary to run (default: the fork's `build/ttyd`) |
 | `TTYD_CLIP_DISPLAY` | X display holding the paste clipboard (default `:77`) |
+| `TTYD_SESSION_ARGS` | Wrapper args for a bare URL, e.g. `cwd:/srv/app name:main` |
 
 ---
 
@@ -490,8 +535,12 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
 └── deploy/               # operational layer (build + run the fork)
     ├── config/
     │   └── tmux-persist.conf # resurrect + continuum settings (sourced by ~/.tmux.conf)
+    ├── systemd/
+    │   ├── ttyd.service      # Unit template (@PLACEHOLDER@s filled in at install)
+    │   └── ttyd.env.example  # Seed for /etc/default/ttyd (port, creds, landing session)
     ├── scripts/
     │   ├── setup-ubuntu-vps.sh # One-shot build + install + start on a fresh VPS
+    │   ├── install-systemd.sh # Install the unit; retire the old two-process setup
     │   ├── start-ttyd.sh     # Build if needed, then start ttyd (+ tmux persistence)
     │   ├── stop-ttyd.sh      # Stop ttyd and the clipboard bridge
     │   ├── status-ttyd.sh    # Check status

@@ -52,8 +52,8 @@ clipboard internals, session routing, and persistence in depth.
 
 # Quick start
 
-The fastest path is the deploy kit, which starts the localhost ttyd backend and the public vkbd UI
-together:
+The fastest path is the deploy kit. One process serves everything — the vkbd UI, the terminal
+WebSocket and image paste:
 
 ```bash
 bash deploy/scripts/start-ttyd.sh
@@ -73,9 +73,16 @@ bash deploy/scripts/start-ttyd.sh
 ══════════════════════════════════════════════════════════════
 ```
 
-Only port **10090** is meant to be exposed/tunneled — the ttyd backend stays bound to
-`127.0.0.1:7681`. See [deploy/README.md](deploy/README.md) for options, session routing, image
-paste, and persistence.
+Port **10090** is the only one to expose or tunnel; pass `-b 127.0.0.1` to keep ttyd local and put
+a tunnel or reverse proxy in front. See [deploy/README.md](deploy/README.md) for options, session
+routing, image paste, and persistence.
+
+To have it come back on boot, install the systemd unit — it runs the same script in the foreground,
+and restarts leave live tmux sessions untouched:
+
+```bash
+sudo bash deploy/scripts/install-systemd.sh
+```
 
 On a fresh Ubuntu VPS, `bash deploy/scripts/setup-ubuntu-vps.sh` builds, installs, and starts
 everything in one shot.
