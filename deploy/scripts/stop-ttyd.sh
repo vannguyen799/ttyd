@@ -12,10 +12,12 @@ NC='\033[0m'
 
 echo -e "${YELLOW}Stopping Web Terminal...${NC}"
 
-# Stop the custom vkbd web UI (public port) first.
-bash "$SCRIPT_DIR/stop-ttyd-ui.sh" 2>/dev/null || true
+# Stop the webpack dev server if one is running. It is not part of the normal
+# deployment any more — ttyd serves the UI itself — but it may be up from a
+# html/ editing session, and leaving it holding the port would be confusing.
+bash "$SCRIPT_DIR/stop-ttyd-ui.sh" >/dev/null 2>&1 || true
 
-# Stop the ttyd backend
+# Stop ttyd
 if [ -f "$PIDFILE_TTYD" ]; then
     kill $(cat $PIDFILE_TTYD) 2>/dev/null
     rm -f $PIDFILE_TTYD

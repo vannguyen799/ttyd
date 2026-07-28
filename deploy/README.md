@@ -1,6 +1,6 @@
 # ttyd - Web Terminal (Local)
 
-Lightweight web terminal accessible from any browser. A custom virtual-keyboard (vkbd) UI is served on a **single public port `10090`**; it proxies to a **localhost-only `ttyd` backend** (port `7681`) that runs the PTY + tmux. Only `10090` is meant to be exposed/tunneled — `7681` is internal.
+Lightweight web terminal accessible from any browser. **One process, one port** (`10090`): this fork's `ttyd` binary serves the custom virtual-keyboard (vkbd) UI, the terminal WebSocket and the image-paste endpoint itself. There is no proxy and no Node runtime in the deployment.
 
 ## What is ttyd?
 
@@ -32,12 +32,21 @@ Lightweight web terminal accessible from any browser. A custom virtual-keyboard 
 
 Add to your `dev.nix`:
 
+The `ttyd` binary is **built from this repo**, not installed from a package —
+stock ttyd serves its own default UI and has no `/clipboard-image` endpoint.
+`start-ttyd.sh` builds it for you; you only need the build and runtime deps:
+
 ```nix
 packages = [
   # ... your packages
 
-  # Web Terminal
-  pkgs.ttyd
+  # Web Terminal — build deps for this fork's ttyd
+  pkgs.cmake
+  pkgs.libwebsockets
+  pkgs.json_c
+  pkgs.libuv
+  pkgs.zlib
+
   pkgs.tmux      # default session multiplexer
   pkgs.screen    # optional, for /screen/<name> routes
 
@@ -63,7 +72,7 @@ Output:
   WEB TERMINAL READY
 ══════════════════════════════════════════════════════════════
 
-  URL: http://localhost:10090       # public vkbd UI (the one you open)
+  URL: http://localhost:10090
 
   Username: user
   Password: abc12345
@@ -72,9 +81,9 @@ Output:
 ══════════════════════════════════════════════════════════════
 ```
 
-> `start-ttyd.sh` brings up **both** the localhost `ttyd` backend and the
-> public vkbd UI on `10090` in one shot; `stop-ttyd.sh` stops both. You only
-> ever open / tunnel port **10090**.
+> `start-ttyd.sh` builds the fork's binary if `build/ttyd` is missing or older
+> than the sources, then runs it. A restart with unchanged sources skips the
+> build and is instant.
 
 ---
 
@@ -121,8 +130,9 @@ bash deploy/scripts/stop-ttyd.sh
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-p, --password` | Set terminal password | Random 8-char |
-| `-P, --port` | Internal ttyd backend port (localhost only) | 7681 |
+| `-P, --port` | Public port to serve on | 10090 |
 | `-u, --username` | Set username | user |
+| `-b, --bind` | Address to bind | 0.0.0.0 |
 | `-n, --no-auth` | Disable authentication | false |
 | `-h, --help` | Show help | - |
 
@@ -132,8 +142,10 @@ bash deploy/scripts/stop-ttyd.sh
 |----------|-------------|
 | `TTYD_PASSWORD` | Terminal password |
 | `TTYD_USERNAME` | Username |
-| `TTYD_PORT` | Internal ttyd backend port (default 7681) |
-| `TTYD_UI_PORT` | Public vkbd UI port (default 10090) |
+| `TTYD_PORT` | Public port (default 10090) |
+| `TTYD_BIND` | Bind address (default 0.0.0.0) |
+| `TTYD_BIN` | ttyd binary to run (default: the fork's `build/ttyd`) |
+| `TTYD_CLIP_DISPLAY` | X display holding the paste clipboard (default `:77`) |
 
 ---
 
@@ -143,17 +155,15 @@ bash deploy/scripts/stop-ttyd.sh
 ┌─────────────────┐
 │ Browser         │
 └────────┬────────┘
-         │ HTTP/WebSocket   (public)
+         │ HTTP/WebSocket
          ▼
-┌────────────────────────────┐
-│ vkbd web UI (webpack)      │  port 10090  ← the only exposed port
-│ serves custom UI + proxies │
-└────────┬───────────────────┘
-         │ proxy /ws + /token   (localhost)
-         ▼
-┌────────────────────────────┐
-│ ttyd backend               │  127.0.0.1:7681  (internal, not exposed)
-└────────┬───────────────────┘
+┌──────────────────────────────────────────┐
+│ ttyd (this fork)            port 10090   │  ← the only process
+│   /                → vkbd UI (html.h)    │
+│   /ws              → PTY                 │
+│   /token           → basic-auth token    │
+│   /clipboard-image → xclip (clipboard.c) │
+└────────┬─────────────────────────────────┘
          │
          ▼
 ┌─────────────────┐
@@ -161,17 +171,16 @@ bash deploy/scripts/stop-ttyd.sh
 └─────────────────┘
 ```
 
-1. **vkbd UI** (webpack dev server, `start-ttyd-ui.sh`) serves the custom
-   virtual-keyboard front-end on the public port **10090**.
-2. It proxies `/ws` + `/token` to the **ttyd backend**, which is bound to
-   `127.0.0.1:7681` and never exposed externally.
-3. **ttyd** runs the PTY and attaches to tmux (see Session Routing).
+The whole front-end is compiled into the binary: `yarn build` in `html/`
+inlines the bundle into a single HTML file, gzips it and emits it as a C array
+in `src/html.h`, which `src/http.c` serves at `/`. So there is no static file
+tree to deploy, no Node runtime on the box, and no second port to firewall.
 
-> Why two processes? The stock `ttyd` binary (`pkgs.ttyd`) only serves its
-> own default UI. The custom vkbd UI lives in the `_ttyd` submodule and is
-> served by webpack, which proxies the terminal traffic to ttyd. To collapse
-> to a single process you'd have to build the fork's ttyd binary with the UI
-> embedded.
+**Editing the front-end.** Rebuilding the binary on every CSS tweak is
+miserable, so `start-ttyd-ui.sh` still exists: it runs the webpack dev server
+(port 9000) with hot reload and proxies `/ws`, `/token` and `/clipboard-image`
+to the real ttyd. When you're happy, `yarn build` bakes the result back into
+`src/html.h` and the next `start-ttyd.sh` picks it up.
 
 ---
 
@@ -269,13 +278,21 @@ A browser tab can't reach the host clipboard, and a headless server has no X
 session at all — so Ctrl+V finds nothing. The bridge supplies both halves:
 
 ```
-Browser paste/drop  ──POST /clipboard-image──▶  webpack (webpack.config.js)
+Browser paste/drop  ──POST /clipboard-image──▶  ttyd (src/clipboard.c)
                                                       │ xclip -i (stdin)
                                                       ▼
                                             X clipboard on :77  (Xvfb, 1x1)
                                                       ▲
    UI sends Ctrl+V (0x16) ──▶ tmux ──▶ claude ────────┘  reads it, shows [Image #1]
 ```
+
+The bytes are piped to `xclip` asynchronously on ttyd's libuv loop — an 8 MB
+paste is far past a pipe buffer, and a blocking write would stall every other
+terminal on the server. The reply waits for `xclip`'s parent to exit rather
+than merely for the write to flush: `xclip` forks into the background only
+*after* it has claimed the selection, so a missing display or a missing
+`xclip` comes back as a real error instead of a success followed by a paste
+that does nothing.
 
 `start-clipboard-x.sh` runs a 1x1 headless display (~3 MB) whose only job is
 holding a clipboard selection. It is deliberately separate from the VNC (`:1`)
@@ -311,8 +328,9 @@ rejected. Nothing is written to disk: the image is piped to `xclip` via stdin.
 
 ## Security Notes
 
-- **Backend is localhost-only**: the `ttyd` backend binds to `127.0.0.1:7681` and is never exposed. Only the vkbd UI on `10090` is public — expose/tunnel just that port.
-- **Password protection**: Enabled by default with random password. The UI's webpack proxy injects the same credential onto the `/ws` upgrade (Safari/iOS can't send the auth header there), while `/token` stays password-gated.
+- **One exposed port**: ttyd binds `0.0.0.0:10090` by default. Pass `-b 127.0.0.1` to keep it local and reach it through a tunnel or reverse proxy instead.
+- **Password protection**: enabled by default with a random password. `/` and `/token` are gated by HTTP Basic Auth; `/clipboard-image` by the same credential, replayed by the client in an `Authorization` header.
+- **WebSocket auth**: the `/ws` upgrade deliberately does *not* require the `Authorization` header — WebKit never sends one on an upgrade, so requiring it locked out every iPhone and iPad. The gate is the `AuthToken` message instead: until it arrives and matches, ttyd refuses every other command and spawns no PTY. An unauthenticated peer can complete the handshake and nothing else.
 - **Disable auth** (optional): Use `-n` flag for open access
 
 ```bash
@@ -341,15 +359,25 @@ bash deploy/scripts/start-ttyd.sh -n
 
 ## Troubleshooting
 
-### ttyd not found
+### Build fails / ttyd not found
 
-Rebuild your IDX environment after adding packages to `dev.nix`:
-- Press `Ctrl+Shift+P` → "IDX: Rebuild Environment"
+`start-ttyd.sh` builds `build/ttyd` from this checkout. If that fails it
+prints the log path — `/tmp/ttyd-build.log` — and usually the cause is a
+missing dev package (`libwebsockets`, `json-c`, `libuv`, `zlib`, `cmake`).
+On Ubuntu, `deploy/scripts/setup-ubuntu-vps.sh` installs all of them; under
+Nix, add the packages listed in Requirements to `dev.nix` and rebuild the
+environment (`Ctrl+Shift+P` → "IDX: Rebuild Environment").
 
-Or install via nix-env:
+Already have a fork binary elsewhere? Point at it and skip the build:
 ```bash
-nix-env -iA nixpkgs.ttyd
+TTYD_BIN=/usr/local/bin/ttyd bash deploy/scripts/start-ttyd.sh
 ```
+
+### Default UI instead of the virtual keyboard
+
+You are running a stock `ttyd`, not this fork. Check what started:
+`ps aux | grep ttyd`. Unset `TTYD_BIN` (or point it at `build/ttyd`) and
+restart.
 
 ### Connection refused
 
@@ -464,11 +492,11 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     │   └── tmux-persist.conf # resurrect + continuum settings (sourced by ~/.tmux.conf)
     ├── scripts/
     │   ├── setup-ubuntu-vps.sh # One-shot build + install + start on a fresh VPS
-    │   ├── start-ttyd.sh     # Start backend + public vkbd UI (+ tmux persistence)
-    │   ├── stop-ttyd.sh      # Stop both UI and backend
-    │   ├── status-ttyd.sh    # Check status (UI + backend)
-    │   ├── start-ttyd-ui.sh  # Public vkbd UI (webpack) on :10090, proxies to backend
-    │   ├── stop-ttyd-ui.sh   # Stop the vkbd UI server
+    │   ├── start-ttyd.sh     # Build if needed, then start ttyd (+ tmux persistence)
+    │   ├── stop-ttyd.sh      # Stop ttyd and the clipboard bridge
+    │   ├── status-ttyd.sh    # Check status
+    │   ├── start-ttyd-ui.sh  # DEV ONLY: webpack hot-reload server on :9000
+    │   ├── stop-ttyd-ui.sh   # Stop the dev server
     │   ├── start-clipboard-x.sh # Headless X (:77) holding the paste clipboard
     │   └── ttyd-session.sh   # URL-arg routing → tmux / screen
     └── README.md             # This file

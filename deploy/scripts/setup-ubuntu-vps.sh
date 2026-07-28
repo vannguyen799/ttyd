@@ -16,7 +16,7 @@
 #   bash ttyd/deploy/scripts/setup-ubuntu-vps.sh [OPTIONS]
 #
 # Options:
-#   -P, --port PORT        Web terminal port            (default: 7681)
+#   -P, --port PORT        Web terminal port            (default: 10090)
 #   -u, --username USER    Basic-auth username          (default: user)
 #   -p, --password PASS    Basic-auth password          (default: random)
 #   -n, --no-auth          Disable authentication
@@ -31,7 +31,9 @@ set -euo pipefail
 REPO_URL_DEFAULT="https://github.com/vannguyen799/ttyd-pro.git"
 TTYD_DIR_DEFAULT="$HOME/ttyd"
 
-PORT=7681
+# The one public port: this ttyd serves the vkbd UI, the WebSocket and the
+# image-paste endpoint itself, so there is nothing else to expose.
+PORT=10090
 USERNAME="user"
 PASSWORD=""
 NO_AUTH=false
@@ -75,7 +77,7 @@ $SUDO apt-get update -qq
 $SUDO apt-get install -y -qq \
   build-essential cmake git pkg-config \
   libjson-c-dev libwebsockets-dev zlib1g-dev libssl-dev libuv1-dev \
-  tmux screen ca-certificates curl >/dev/null
+  tmux screen ca-certificates curl xclip xvfb >/dev/null
 ok "dependencies installed"
 
 # ── 2. fetch the ttyd fork (carries the vkbd source in src/html.h) ─────

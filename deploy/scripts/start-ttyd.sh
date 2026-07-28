@@ -9,8 +9,9 @@
 #
 # Options:
 #   -p, --password PASSWORD    Set terminal password (default: random 8-char)
-#   -P, --port PORT            Set ttyd port (default: 7681)
+#   -P, --port PORT            Public port to serve on (default: 10090)
 #   -u, --username USERNAME    Set username (default: user)
+#   -b, --bind ADDRESS         Address to bind (default: 0.0.0.0)
 #   -n, --no-auth              Disable authentication
 #   -h, --help                 Show this help
 #
@@ -18,11 +19,16 @@
 #   TTYD_PASSWORD              Terminal password (overridden by -p)
 #   TTYD_USERNAME              Username (overridden by -u)
 #   TTYD_PORT                  Port (overridden by -P)
+#   TTYD_BIND                  Bind address (overridden by -b)
+#   TTYD_BIN                   ttyd binary to run (default: the fork's build)
 # ══════════════════════════════════════════════════════════════
 
 PIDFILE_TTYD="/tmp/ttyd.pid"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION_WRAPPER="$SCRIPT_DIR/ttyd-session.sh"
+# These deploy scripts live at <fork>/deploy/scripts, so the fork root — which
+# holds the C sources and the embedded UI in src/html.h — is two levels up.
+FORK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # User-installed CLIs such as Claude Code commonly live here. Services often
 # start with a minimal PATH that omits it, so make it available to ttyd and
@@ -43,9 +49,14 @@ generate_password() {
     cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1
 }
 
-# Default values
-PORT="${TTYD_PORT:-7681}"          # internal ttyd backend port (localhost only)
-UI_PORT="${TTYD_UI_PORT:-10090}"   # public port: custom vkbd UI (start-ttyd-ui.sh)
+# Default values.
+#
+# One process, one port: the fork's ttyd serves the vkbd UI itself (it is
+# baked into the binary via src/html.h), so there is no webpack proxy in
+# front of it any more. The default stays 10090 — the port this deployment
+# has always been reached on — rather than ttyd's own 7681.
+PORT="${TTYD_PORT:-${TTYD_UI_PORT:-10090}}"
+BIND="${TTYD_BIND:-0.0.0.0}"
 USERNAME="${TTYD_USERNAME:-user}"
 PASSWORD="${TTYD_PASSWORD:-$(generate_password)}"
 NO_AUTH=false
@@ -61,6 +72,10 @@ while [[ $# -gt 0 ]]; do
             PORT="$2"
             shift 2
             ;;
+        -b|--bind)
+            BIND="$2"
+            shift 2
+            ;;
         -u|--username)
             USERNAME="$2"
             shift 2
@@ -74,8 +89,9 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -p, --password PASSWORD    Set terminal password (default: random 8-char)"
-            echo "  -P, --port PORT            Set ttyd port (default: 7681)"
+            echo "  -P, --port PORT            Public port to serve on (default: 10090)"
             echo "  -u, --username USERNAME    Set username (default: user)"
+            echo "  -b, --bind ADDRESS         Address to bind (default: 0.0.0.0)"
             echo "  -n, --no-auth              Disable authentication"
             echo "  -h, --help                 Show this help"
             echo ""
@@ -84,9 +100,10 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 -p mysecret             # Custom password"
             echo "  $0 -n                      # No authentication"
             echo "  $0 -u admin -p secret123   # Custom user/pass"
+            echo "  $0 -b 127.0.0.1            # Reachable only through a local proxy/tunnel"
             echo ""
             echo "Environment variables:"
-            echo "  TTYD_PASSWORD, TTYD_USERNAME, TTYD_PORT"
+            echo "  TTYD_PASSWORD, TTYD_USERNAME, TTYD_PORT, TTYD_BIND, TTYD_BIN"
             exit 0
             ;;
         *)
@@ -125,8 +142,50 @@ echo -e "${CYAN}  ttyd - Starting Web Terminal${NC}"
 echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
+# Resolve the ttyd binary to run.
+#
+# It must be THIS fork's build, not a distro/nix ttyd: the vkbd UI, the tab
+# bar and the /clipboard-image endpoint all live in the binary now. Stock ttyd
+# would come up serving its own default UI and image paste would 404, which is
+# a confusing way to fail — so build from the checkout rather than fall back.
+#
+# Rebuild only when the binary is missing or older than a source file, so a
+# normal restart stays instant.
+resolve_ttyd_bin() {
+    if [ -n "${TTYD_BIN:-}" ]; then
+        [ -x "$TTYD_BIN" ] || { echo -e "${RED}Error: TTYD_BIN=$TTYD_BIN is not executable${NC}"; return 1; }
+        return 0
+    fi
+
+    TTYD_BIN="$FORK_ROOT/build/ttyd"
+    if [ ! -f "$FORK_ROOT/CMakeLists.txt" ]; then
+        echo -e "${RED}Error: fork sources not found at $FORK_ROOT${NC}"
+        return 1
+    fi
+
+    local newest
+    newest=$(find "$FORK_ROOT/src" "$FORK_ROOT/CMakeLists.txt" -newer "$TTYD_BIN" -print -quit 2>/dev/null)
+    if [ -x "$TTYD_BIN" ] && [ -z "$newest" ]; then
+        return 0
+    fi
+
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo -e "${RED}Error: cmake not found — needed to build the ttyd fork.${NC}"
+        echo -e "${YELLOW}Run deploy/scripts/setup-ubuntu-vps.sh, or set TTYD_BIN to a prebuilt fork binary.${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}Building ttyd from $FORK_ROOT (sources changed or no binary yet)...${NC}"
+    if ! cmake -S "$FORK_ROOT" -B "$FORK_ROOT/build" -DCMAKE_BUILD_TYPE=Release >/tmp/ttyd-build.log 2>&1 \
+        || ! cmake --build "$FORK_ROOT/build" -j "$(nproc)" >>/tmp/ttyd-build.log 2>&1; then
+        echo -e "${RED}Error: build failed. See /tmp/ttyd-build.log${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}✓ built $TTYD_BIN${NC}"
+}
+
 # Ensure dependencies (auto-install if missing)
-ensure_package "ttyd" "ttyd" || exit 1
+resolve_ttyd_bin || exit 1
 ensure_package "tmux" "tmux" || echo -e "${YELLOW}Warning: tmux missing, default sessions will fall back to shell${NC}"
 command -v screen >/dev/null 2>&1 || echo -e "${YELLOW}Warning: screen not installed, /screen/<name> routes will fall back to shell${NC}"
 # Clipboard bridge deps — optional: only browser image paste depends on them.
@@ -174,10 +233,11 @@ fi
 # A browser tab can't reach the host clipboard, so Ctrl+V never finds an
 # image and Claude Code can't be given screenshots. Fix: run a 1x1 headless
 # X display whose only job is holding a clipboard selection. The web UI
-# POSTs a pasted image to /clipboard-image (webpack.config.js), which loads
-# it into that clipboard via xclip; Ctrl+V in Claude then works natively.
-# Exporting DISPLAY here is what makes it reach Claude: ttyd inherits it →
-# ttyd-session.sh → tmux → the agent process.
+# POSTs a pasted image to ttyd's /clipboard-image endpoint (src/clipboard.c),
+# which loads it into that clipboard via xclip; Ctrl+V in Claude then works
+# natively. Exporting DISPLAY here is what makes it reach Claude: ttyd
+# inherits it → ttyd-session.sh → tmux → the agent process. TTYD_CLIP_DISPLAY
+# is what ttyd itself reads when spawning xclip.
 CLIP_DISPLAY="${TTYD_CLIP_DISPLAY:-:77}"
 if bash "$SCRIPT_DIR/start-clipboard-x.sh"; then
     export DISPLAY="$CLIP_DISPLAY"
@@ -207,30 +267,30 @@ TTYD_FONT='MesloLGS NF, Menlo, Monaco, Consolas, "Courier New", monospace'
 #   on. Lets Mac users ⌥+drag to make a real xterm selection (then plain
 #   Cmd+C copies), matching Shift+drag on Windows/Linux. Primary copy path
 #   is still the OSC 52 clipboard bridge in tmux-persist.conf.
-# -i 127.0.0.1: bind the ttyd backend to localhost ONLY — never exposed
-#   externally. The single public entry is the custom vkbd UI on port
-#   $UI_PORT (start-ttyd-ui.sh), which proxies /ws + /token to this backend.
-echo -e "${YELLOW}Starting ttyd backend on 127.0.0.1:$PORT (internal)...${NC}"
-COMMON_OPTS=(-p "$PORT" -i 127.0.0.1 -W -a
+# -i $BIND: ttyd is the public entry point now, so it binds publicly by
+#   default. Pass -b 127.0.0.1 to keep it local and put a tunnel or reverse
+#   proxy in front.
+echo -e "${YELLOW}Starting ttyd on $BIND:$PORT...${NC}"
+COMMON_OPTS=(-p "$PORT" -i "$BIND" -W -a
     -t "theme=$TTYD_THEME"
     -t "fontFamily=$TTYD_FONT"
     -t "fontSize=14"
     -t "cursorBlink=true"
     -t "macOptionClickForcesSelection=true"
 )
-# Credential file for the custom vkbd UI server (start-ttyd-ui.sh). Safari/iOS
-# can't send the Authorization header on the WebSocket upgrade, so the webpack
-# proxy injects it from this file (base64 "user:pass" — same value ttyd's
-# /token returns). See ../../html/webpack.config.js readTtydCredential().
+# Credential file. ttyd itself does not read it — it only exists for the
+# webpack dev server (start-ttyd-ui.sh), which still proxies to this instance
+# when you are iterating on html/. Keep it in sync so switching to dev mode
+# needs no restart.
 CRED_FILE="/tmp/ttyd.cred"
 if [ "$NO_AUTH" = true ]; then
     rm -f "$CRED_FILE"
-    ttyd "${COMMON_OPTS[@]}" "$SESSION_WRAPPER" &
+    "$TTYD_BIN" "${COMMON_OPTS[@]}" "$SESSION_WRAPPER" &
     AUTH_MSG="None (open access)"
 else
     printf '%s' "$USERNAME:$PASSWORD" | base64 -w0 > "$CRED_FILE"
     chmod 600 "$CRED_FILE"
-    ttyd "${COMMON_OPTS[@]}" -c "$USERNAME:$PASSWORD" "$SESSION_WRAPPER" &
+    "$TTYD_BIN" "${COMMON_OPTS[@]}" -c "$USERNAME:$PASSWORD" "$SESSION_WRAPPER" &
     AUTH_MSG="$USERNAME / $PASSWORD"
 fi
 echo $! > $PIDFILE_TTYD
@@ -241,18 +301,7 @@ if ! kill -0 $(cat $PIDFILE_TTYD) 2>/dev/null; then
     echo -e "${RED}Error: ttyd failed to start${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ ttyd backend started (127.0.0.1:$PORT)${NC}"
-
-# ── custom vkbd web UI — the single public port ────────────────
-# webpack dev server on $UI_PORT serves the virtual-keyboard UI and proxies
-# /ws + /token to the localhost ttyd backend above. This is the only port
-# users/tunnels should reach; the raw ttyd backend stays internal.
-echo -e "${YELLOW}Starting custom web UI on port $UI_PORT...${NC}"
-if TTYD_UI_PORT="$UI_PORT" bash "$SCRIPT_DIR/start-ttyd-ui.sh"; then
-    echo -e "${GREEN}✓ web UI started (port $UI_PORT)${NC}"
-else
-    echo -e "${YELLOW}⚠ web UI failed to start — backend is still up on 127.0.0.1:$PORT${NC}"
-fi
+echo -e "${GREEN}✓ ttyd started ($BIND:$PORT) — UI, WebSocket and image paste all in one process${NC}"
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
@@ -260,19 +309,19 @@ echo -e "${GREEN}  WEB TERMINAL READY${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-echo -e "  ${CYAN}URL:${NC} http://localhost:$UI_PORT"
+echo -e "  ${CYAN}URL:${NC} http://localhost:$PORT"
 echo ""
 echo -e "  ${CYAN}Session routing (auto-attach):${NC}"
-echo -e "    default (tmux main):   http://localhost:$UI_PORT/"
-echo -e "    tmux <name>:           http://localhost:$UI_PORT/?arg=<name>"
-echo -e "    screen <name>:         http://localhost:$UI_PORT/?arg=screen&arg=<name>"
+echo -e "    default (tmux main):   http://localhost:$PORT/"
+echo -e "    tmux <name>:           http://localhost:$PORT/?arg=<name>"
+echo -e "    screen <name>:         http://localhost:$PORT/?arg=screen&arg=<name>"
 echo -e "  ${CYAN}Modifiers (stack before session spec):${NC}"
 echo -e "    cwd:<path>             chdir before launch"
 echo -e "    codex                  run \`codex\` (no args) on first-create"
 echo -e "    codex:<args>           run \`codex <args>\` on first-create"
 echo -e "    claude                 run \`claude\` (no args) on first-create"
 echo -e "    claude:<args>          run \`claude <args>\` on first-create"
-echo -e "    e.g.  http://localhost:$UI_PORT/?arg=cwd:/home/user/MetrixCRM&arg=codex&arg=crm"
+echo -e "    e.g.  http://localhost:$PORT/?arg=cwd:/home/user/MetrixCRM&arg=codex&arg=crm"
 
 echo ""
 if [ "$NO_AUTH" = true ]; then

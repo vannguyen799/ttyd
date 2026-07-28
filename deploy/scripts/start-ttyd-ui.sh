@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Start custom ttyd web UI (virtual-keyboard build from this ttyd fork).
-# Serves http://localhost:$PORT and proxies /ws + /token to ttyd backend.
+# Development-only: webpack dev server for the html/ front-end, with
+# hot reload.
+#
+# The normal deployment does NOT use this — start-ttyd.sh runs a single ttyd
+# process that serves the UI from src/html.h. Use this while editing html/,
+# then `yarn build` to bake the result back into the binary.
+#
+# Serves http://localhost:$PORT and proxies /ws, /token and /clipboard-image
+# to the ttyd instance on $TTYD_PORT (default 10090).
 set -euo pipefail
 
 # These deploy scripts live at <ttyd-fork>/deploy/scripts, so the fork root
 # (which holds the html/ vkbd frontend) is two levels up.
 TTYD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HTML_DIR="$TTYD_DIR/html"
-PORT="${TTYD_UI_PORT:-10090}"
+# 9000, not 10090: ttyd now owns the public port, so the dev server needs one
+# of its own.
+PORT="${TTYD_UI_PORT:-9000}"
 PID_FILE="/tmp/ttyd-ui.pid"
 LOG_FILE="/tmp/ttyd-ui.log"
 

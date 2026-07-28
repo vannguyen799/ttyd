@@ -14,21 +14,12 @@ echo -e "${CYAN}  Web Terminal Status${NC}"
 echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-UI_PORT="${TTYD_UI_PORT:-10090}"
-
-# Public entry: custom vkbd web UI (webpack) on $UI_PORT
-if pgrep -f "webpack serve.*--port $UI_PORT" > /dev/null; then
-    echo -e "  Web UI:      ${GREEN}Running${NC} (public, port $UI_PORT)"
-    echo -e "  URL:         ${CYAN}http://localhost:$UI_PORT${NC}"
-else
-    echo -e "  Web UI:      ${RED}Stopped${NC} (public port $UI_PORT)"
-fi
-echo ""
-
-# Internal backend: ttyd (bound to localhost, proxied by the UI)
+# ttyd — the single public process: UI, WebSocket and image paste in one.
 if pgrep -f "ttyd -p" > /dev/null; then
     PORT=$(pgrep -af "ttyd -p" | grep -oE '\-p [0-9]+' | awk '{print $2}' | head -1)
-    echo -e "  ttyd:        ${GREEN}Running${NC} (internal backend, 127.0.0.1:${PORT:-7681})"
+    BIND=$(pgrep -af "ttyd -p" | grep -oE '\-i [^ ]+' | awk '{print $2}' | head -1)
+    echo -e "  ttyd:        ${GREEN}Running${NC} (${BIND:-0.0.0.0}:${PORT:-10090})"
+    echo -e "  URL:         ${CYAN}http://localhost:${PORT:-10090}${NC}"
 
     # Check if auth is enabled
     if pgrep -af "ttyd -p" | grep -q "\-c "; then
@@ -54,6 +45,12 @@ if [ -f "$PIDFILE_CLIP" ] && kill -0 "$(cat "$PIDFILE_CLIP")" 2>/dev/null; then
     echo -e "  Image paste: ${GREEN}Running${NC} (headless X on $CLIP_DISPLAY)"
 else
     echo -e "  Image paste: ${RED}Stopped${NC} (needs xclip + Xvfb)"
+fi
+
+# Dev server — not part of the deployment, but worth flagging when it is up.
+if pgrep -f "webpack serve" > /dev/null; then
+    DEV_PORT=$(pgrep -af "webpack serve" | grep -oE '\-\-port [0-9]+' | awk '{print $2}' | head -1)
+    echo -e "  Dev server:  ${YELLOW}Running${NC} (webpack, port ${DEV_PORT:-9000} — html/ editing only)"
 fi
 
 echo ""
