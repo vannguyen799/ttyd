@@ -986,7 +986,21 @@ export class Xterm {
         // fit. Now that it's visible, re-fit to the real geometry.
         this.safeFit();
         const coarse = window.matchMedia?.('(pointer: coarse)').matches;
-        if (!coarse) this.terminal.focus();
+        // Never steal focus from an editable field outside the terminal. A tab
+        // switch is exactly when the tab-rename box opens (its first click
+        // selects the tab, the second opens the box), so focusing here would
+        // blur the box the instant it appeared — the rename would silently
+        // close and only the tab switch would be visible.
+        if (!coarse && !this.editingOutside()) this.terminal.focus();
+    }
+
+    // Is the keyboard currently owned by an editable element that is not part of
+    // this terminal (tab rename box, vkbd input bar, …)?
+    private editingOutside(): boolean {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el || el === document.body) return false;
+        if (this.terminal?.element?.contains(el)) return false;
+        return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA';
     }
 
     // Is this instance the one currently owning the window singletons?
