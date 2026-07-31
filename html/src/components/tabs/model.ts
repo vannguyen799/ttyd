@@ -33,6 +33,7 @@ export interface BarState {
     position: BarPosition;
     menuMode: boolean; // collapsed to a single ☰ menu button
     scale?: number; // proportional zoom of the whole bar (1 = default)
+    opacity?: number; // opacity of the bar's chrome — chips/buttons (1 = default)
     colWidth?: number; // column width (px) in left/right mode, drag-resizable
     autoHide?: boolean; // hide the bar after a few idle seconds; reveal on edge-hover
     showAllGroups?: boolean; // show every tab (all sessions) vs only the active tab's group
@@ -47,6 +48,18 @@ export const COL_WIDTH_DEFAULT = 190;
 export function clampColWidth(w: number): number {
     if (!Number.isFinite(w)) return COL_WIDTH_DEFAULT;
     return Math.max(COL_WIDTH_MIN, Math.min(COL_WIDTH_MAX, Math.round(w)));
+}
+
+// Clamp for the bar's chrome opacity. The floor is well above 0 on purpose: the
+// bar is already an overlay with no fill of its own, so a fully transparent one
+// would leave nothing on screen to grab and no way back to this slider.
+export const BAR_OPACITY_MIN = 0.2;
+export const BAR_OPACITY_MAX = 1;
+export const BAR_OPACITY_DEFAULT = 1;
+
+export function clampOpacity(o: number): number {
+    if (!Number.isFinite(o)) return BAR_OPACITY_DEFAULT;
+    return Math.max(BAR_OPACITY_MIN, Math.min(BAR_OPACITY_MAX, Math.round(o * 100) / 100));
 }
 
 export interface TabsState {
@@ -178,6 +191,7 @@ function defaultBar(): BarState {
         position: 'top',
         menuMode: false,
         scale: 1,
+        opacity: BAR_OPACITY_DEFAULT,
         colWidth: COL_WIDTH_DEFAULT,
         autoHide: true,
         showAllGroups: false,
@@ -210,6 +224,7 @@ export function normalizeTabsState(saved: TabsState | null): TabsState {
     // and focused, so deep-links still land somewhere even with saved tabs.
     const bar: BarState = { ...defaultBar(), ...(saved.bar || {}) };
     bar.colWidth = clampColWidth(bar.colWidth ?? COL_WIDTH_DEFAULT);
+    bar.opacity = clampOpacity(bar.opacity ?? BAR_OPACITY_DEFAULT);
     // Tabs saved before namespacing existed have no group. They were one flat
     // list, so fold them all into a single legacy group (the first tab's session)
     // — that keeps them grouped together and visible, never scattered or hidden.

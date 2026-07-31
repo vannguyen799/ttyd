@@ -6,10 +6,12 @@ import { VirtualKeyboard } from './vkbd';
 import { loadSettings } from './vkbd/storage';
 import { TabBar } from './tabs/tabbar';
 import {
+    BAR_OPACITY_DEFAULT,
     BarMode,
     TabInfo,
     TabsState,
     backendFromSearch,
+    clampOpacity,
     loadTabsState,
     makeTab,
     nextSessionName,
@@ -343,6 +345,11 @@ export class App extends Component<Record<string, never>, AppState> {
     }
 
     @bind
+    private setBarOpacity(opacity: number) {
+        this.commit({ ...this.state, bar: { ...this.state.bar, opacity: clampOpacity(opacity) } });
+    }
+
+    @bind
     private setBarColWidth(colWidth: number) {
         this.commit({ ...this.state, bar: { ...this.state.bar, colWidth } });
     }
@@ -390,6 +397,7 @@ export class App extends Component<Record<string, never>, AppState> {
                     position={bar.position}
                     menuMode={bar.menuMode}
                     scale={bar.scale ?? 1}
+                    opacity={bar.opacity ?? BAR_OPACITY_DEFAULT}
                     colWidth={bar.colWidth ?? 190}
                     autoHide={bar.autoHide ?? false}
                     showAllGroups={showAll}
@@ -399,6 +407,7 @@ export class App extends Component<Record<string, never>, AppState> {
                     onAdd={this.addTab}
                     onSetMode={this.setBarMode}
                     onSetScale={this.setBarScale}
+                    onSetOpacity={this.setBarOpacity}
                     onSetColWidth={this.setBarColWidth}
                     onSetAutoHide={this.setBarAutoHide}
                     onSetShowAll={this.setShowAll}

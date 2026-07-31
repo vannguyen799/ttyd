@@ -1,5 +1,5 @@
 import { h, Component, JSX } from 'preact';
-import { clampColWidth } from './model';
+import { clampColWidth, BAR_OPACITY_MIN, BAR_OPACITY_MAX, BAR_OPACITY_DEFAULT } from './model';
 import type { BarMode, BarPosition, TabInfo } from './model';
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
     position: BarPosition;
     menuMode: boolean;
     scale: number;
+    opacity: number; // opacity of the bar's chrome (chips/buttons); 1 = solid
     colWidth: number; // column width (px) in left/right mode
     autoHide: boolean; // collapse the bar when idle; reveal on edge-hover
     showAllGroups: boolean; // show every tab vs only the active tab's namespace
@@ -19,6 +20,7 @@ interface Props {
     onAdd: () => void;
     onSetMode: (mode: BarMode) => void;
     onSetScale: (scale: number) => void;
+    onSetOpacity: (opacity: number) => void;
     onSetColWidth: (width: number) => void;
     onSetAutoHide: (v: boolean) => void;
     onSetShowAll: (v: boolean) => void;
@@ -391,6 +393,7 @@ export class TabBar extends Component<Props, State> {
                     ))}
                 </div>
                 {this.renderScaleControl()}
+                {this.renderOpacityControl()}
                 {this.renderAutoHideControl()}
                 {this.renderGroupToggle()}
             </div>
@@ -439,31 +442,71 @@ export class TabBar extends Component<Props, State> {
         );
     }
 
-    // Proportional zoom of the whole bar. Kept next to the layout picker since
-    // both shape the bar's footprint. 60%–160%, snapped to a clean 100% default.
-    private renderScaleControl() {
-        const { scale, onSetScale } = this.props;
+    // One labelled percentage slider with a "reset" affordance that appears only
+    // once the value has moved off its default. Shared by the two bar sliders
+    // below so they stay visually identical in the popover.
+    private renderRange(
+        label: string,
+        value: number,
+        def: number,
+        min: number,
+        max: number,
+        step: number,
+        title: string,
+        onSet: (v: number) => void
+    ) {
         return (
-            <div class="tabbar-scale-control">
-                <div class="tabbar-pop-title">
-                    Bar size
-                    <span class="tabbar-scale-val">{Math.round(scale * 100)}%</span>
-                    {scale !== 1 ? (
-                        <button class="tabbar-scale-reset" onClick={() => onSetScale(1)}>
+            <div class="tabbar-range-control">
+                <div class="tabbar-pop-title" title={title}>
+                    {label}
+                    <span class="tabbar-range-val">{Math.round(value * 100)}%</span>
+                    {value !== def ? (
+                        <button class="tabbar-range-reset" onClick={() => onSet(def)}>
                             reset
                         </button>
                     ) : null}
                 </div>
                 <input
                     type="range"
-                    class="tabbar-scale-range"
-                    min="0.6"
-                    max="1.6"
-                    step="0.05"
-                    value={scale}
-                    onInput={e => onSetScale(parseFloat((e.target as HTMLInputElement).value))}
+                    class="tabbar-range-input"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={value}
+                    onInput={e => onSet(parseFloat((e.target as HTMLInputElement).value))}
                 />
             </div>
+        );
+    }
+
+    // Proportional zoom of the whole bar. Kept next to the layout picker since
+    // both shape the bar's footprint. 60%–160%, snapped to a clean 100% default.
+    private renderScaleControl() {
+        return this.renderRange(
+            'Bar size',
+            this.props.scale,
+            1,
+            0.6,
+            1.6,
+            0.05,
+            'Zoom the whole bar',
+            this.props.onSetScale
+        );
+    }
+
+    // How strongly the bar's chrome reads over the terminal it floats on. Only
+    // the chips and buttons carry it — the popovers stay solid, so the slider
+    // you are dragging never fades out from under you.
+    private renderOpacityControl() {
+        return this.renderRange(
+            'Bar opacity',
+            this.props.opacity,
+            BAR_OPACITY_DEFAULT,
+            BAR_OPACITY_MIN,
+            BAR_OPACITY_MAX,
+            0.05,
+            'Fade the tabs and buttons into the terminal behind them',
+            this.props.onSetOpacity
         );
     }
 
@@ -584,7 +627,7 @@ export class TabBar extends Component<Props, State> {
     }
 
     render() {
-        const { tabs, activeId, position, menuMode, scale, colWidth, autoHide } = this.props;
+        const { tabs, activeId, position, menuMode, scale, opacity, colWidth, autoHide } = this.props;
         const { menuOpen, posOpen, hidden } = this.state;
         const active = tabs.find(t => t.id === activeId);
         const isColumn = position === 'left' || position === 'right';
@@ -598,6 +641,11 @@ export class TabBar extends Component<Props, State> {
             // insets too, so the stylesheet divides them back out by this.
             rootStyle['--tabbar-zoom' as keyof JSX.CSSProperties] = String(scale);
         }
+        // Chrome opacity as an inherited custom property rather than an `opacity`
+        // on the root: the popovers are children of the bar, and fading them with
+        // it would dim the very controls being used (and the auto-hide fade, which
+        // owns the root's own opacity).
+        if (opacity !== 1) rootStyle['--tabbar-opacity' as keyof JSX.CSSProperties] = String(opacity);
         if (!menuMode && isColumn) rootStyle.width = `${colWidth}px`;
         // Auto-hide needs no inline geometry: the bar is already pinned to its
         // edge and slides off it with a transform — all in CSS (tabs/style.scss).

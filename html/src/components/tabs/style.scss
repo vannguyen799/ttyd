@@ -221,6 +221,20 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
     }
 }
 
+// ── Chrome opacity ───────────────────────────────────────────────
+// --tabbar-opacity (set inline on the bar root from the user setting) fades the
+// bar's chrome into the terminal it floats over. It is applied per element, not
+// on the root, for two reasons: the root's own opacity belongs to the auto-hide
+// fade above, and the popovers are children of the bar — dimming them along with
+// it would fade out the controls (this slider included) while they are in use.
+// Hence the reset to 1 below, which wins over the inherited value for everything
+// inside a popover.
+$chrome-opacity: var(--tabbar-opacity, 1);
+
+.tabbar-pop {
+    --tabbar-opacity: 1;
+}
+
 // ── Tab chip (glass) ─────────────────────────────────────────────
 .tab-chip {
     display: flex;
@@ -228,6 +242,7 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
     gap: 6px;
     min-width: 0;
     padding: 6px 9px;
+    opacity: $chrome-opacity;
     background: $chip-bg;
     border: 1px solid transparent;
     border-radius: 9px;
@@ -263,7 +278,7 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
     }
     // Asleep: connection released; dim the chip and hollow the dot.
     &.sleeping:not(.active) {
-        opacity: 0.6;
+        opacity: calc(#{$chrome-opacity} * 0.6);
         .tab-title {
             color: $muted;
         }
@@ -308,7 +323,7 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
 
     // Dragged chip while reordering.
     &.dragging {
-        opacity: 0.5;
+        opacity: calc(#{$chrome-opacity} * 0.5);
         cursor: grabbing;
     }
 
@@ -346,6 +361,7 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
     min-width: 30px;
     height: 30px;
     padding: 0 9px;
+    opacity: $chrome-opacity;
     background: rgba(255, 255, 255, 0.07);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 9px;
@@ -398,6 +414,7 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
     width: 46px;
     height: 46px;
     padding: 0;
+    opacity: $chrome-opacity;
     background: rgba(40, 40, 44, 0.62);
     color: $text;
     border: 1px solid $bar-border;
@@ -529,7 +546,8 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
         grid-column: 1 / -1;
     }
 }
-.tabbar-scale-control {
+// Shared layout for the popover's percentage sliders (bar size, bar opacity).
+.tabbar-range-control {
     margin-top: 8px;
 
     .tabbar-pop-title {
@@ -537,12 +555,12 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
         align-items: center;
         gap: 8px;
     }
-    .tabbar-scale-val {
+    .tabbar-range-val {
         margin-left: auto;
         color: $text;
         font-variant-numeric: tabular-nums;
     }
-    .tabbar-scale-reset {
+    .tabbar-range-reset {
         background: transparent;
         border: none;
         color: $accent-line;
@@ -556,7 +574,7 @@ $inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
             text-decoration: underline;
         }
     }
-    .tabbar-scale-range {
+    .tabbar-range-input {
         width: 100%;
         margin: 4px 0 2px;
         accent-color: $accent-line;
