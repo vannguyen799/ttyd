@@ -46,6 +46,9 @@
 #     only — the agent CLI will NOT be re-run.
 #   • <path> must be an existing directory; otherwise a warning is logged
 #     and the wrapper keeps ttyd's launch cwd.
+#   • A new claude session is given an explicit --session-id so the
+#     persistence layer can resume that exact conversation after a reboot
+#     (see resurrect-agent-hook.sh).
 #   • Session names are sanitized: only [A-Za-z0-9._-], max 64 chars.
 #   • Agent args are split on whitespace then %q-quoted to prevent
 #     injection into the tmux shell command.
@@ -79,6 +82,23 @@ sanitize() {
 
 fallback_shell() {
     exec "$SHELL_CMD"
+}
+
+# A lowercase RFC-4122 UUID, or nothing when the host offers no generator.
+# Only ever fed to a flag we control, and validated anyway so a surprising
+# generator can't inject a second token into the tmux command string.
+new_uuid() {
+    local id=""
+    if [ -r /proc/sys/kernel/random/uuid ]; then
+        read -r id < /proc/sys/kernel/random/uuid
+    elif command -v uuidgen >/dev/null 2>&1; then
+        id="$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z')"
+    fi
+    case "$id" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+            printf '%s' "$id"
+            ;;
+    esac
 }
 
 # ── Parse modifiers ──────────────────────────────────────────
@@ -231,6 +251,22 @@ if [ "$AGENT_ENABLED" = 1 ]; then
                 [ -z "$tok" ] && continue
                 quoted+="$(printf ' %q' "$tok")"
             done < <(printf '%s\n' "$AGENT_ARGS" | xargs -n1 2>/dev/null)
+        fi
+        # Pin the conversation id of a brand-new claude pane. Claude Code lets
+        # the id be chosen up front, and knowing it is what makes the pane
+        # restorable: resurrect-agent-hook.sh rewrites the saved
+        # `--session-id <id>` into `--resume <id>`, so a reboot brings the pane
+        # back into *this* conversation instead of an empty one. Skipped when
+        # the caller already picked a session (`claude:--resume …`, `claude:-c`)
+        # or when no source of UUIDs is available.
+        if [ "$AGENT_CMD" = "claude" ]; then
+            case " $AGENT_ARGS " in
+                *" --session-id"* | *" --resume"* | *" -r "* | *" -c "* | *" --continue"*) ;;
+                *)
+                    SESSION_UUID="$(new_uuid)"
+                    [ -n "$SESSION_UUID" ] && quoted+=" --session-id $SESSION_UUID"
+                    ;;
+            esac
         fi
         tmux new-session -d -s "$NAME" \
             "$AGENT_CMD${quoted}; exec $SHELL_CMD"
