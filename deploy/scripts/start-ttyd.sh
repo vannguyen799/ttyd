@@ -244,9 +244,34 @@ fi
 
 # ── tmux session persistence (resurrect + continuum) ───────────
 # Wire ~/.tmux.conf to source the kit's persistence config (idempotent),
-# then kick the tmux server so tmux-continuum auto-restores saved sessions
-# on boot — before any browser connects. Plugins come from dev.nix; if
-# they're absent the config's if-shell guards make it a no-op.
+# make sure the plugins it needs are actually on disk, then kick the tmux
+# server so tmux-continuum auto-restores saved sessions on boot — before any
+# browser connects.
+
+# resurrect and continuum are plain shell scripts; TPM only ever downloaded
+# them. Nix installs them when dev.nix is in play, and everywhere else a git
+# checkout in ~/.tmux/plugins does the same job — which matters because a
+# missing plugin is silent: the config's guards turn the whole persistence
+# layer into a no-op and layouts are lost at the next reboot without a word.
+TMUX_PLUGIN_DIR="$HOME/.tmux/plugins"
+ensure_tmux_plugin() {
+    local repo="$1" name="$2"
+    [ -x "$HOME/.nix-profile/share/tmux-plugins/$name/$name.tmux" ] && return 0
+    [ -x "$TMUX_PLUGIN_DIR/$repo/$name.tmux" ] && return 0
+    if ! command -v git >/dev/null 2>&1; then
+        echo -e "${YELLOW}Warning: git missing, cannot install tmux-$name — sessions won't survive a reboot${NC}"
+        return 1
+    fi
+    echo -e "${YELLOW}Installing tmux-$name into $TMUX_PLUGIN_DIR...${NC}"
+    mkdir -p "$TMUX_PLUGIN_DIR"
+    if ! git clone --depth 1 -q "https://github.com/tmux-plugins/$repo.git" "$TMUX_PLUGIN_DIR/$repo" 2>/dev/null; then
+        rm -rf "${TMUX_PLUGIN_DIR:?}/$repo"
+        echo -e "${YELLOW}Warning: could not fetch tmux-$name — sessions won't survive a reboot${NC}"
+        return 1
+    fi
+    return 0
+}
+
 PERSIST_CONF="$(cd "$SCRIPT_DIR/.." && pwd)/config/tmux-persist.conf"
 if command -v tmux >/dev/null 2>&1 && [ -f "$PERSIST_CONF" ]; then
     USER_TMUX_CONF="$HOME/.tmux.conf"
@@ -260,10 +285,31 @@ if command -v tmux >/dev/null 2>&1 && [ -f "$PERSIST_CONF" ]; then
         } >> "$USER_TMUX_CONF"
         echo -e "${GREEN}✓ Linked tmux persistence config into ~/.tmux.conf${NC}"
     fi
+
+    PERSIST_READY=true
+    ensure_tmux_plugin tmux-resurrect resurrect || PERSIST_READY=false
+    ensure_tmux_plugin tmux-continuum continuum || PERSIST_READY=false
+
+    # The hook that turns saved claude/codex panes into resume commands. The
+    # persistence config is sourced by absolute path and so cannot locate its
+    # own checkout; this symlink is the fixed name it refers to.
+    mkdir -p "$HOME/.tmux"
+    ln -sfn "$SCRIPT_DIR/resurrect-agent-hook.sh" "$HOME/.tmux/ttyd-agent-hook.sh"
+
+    if [ "$PERSIST_READY" = true ]; then
+        echo -e "${GREEN}✓ tmux persistence ready (layout + agent sessions restore on reboot)${NC}"
+    fi
+
     # Starting the server loads the config → continuum restores saved
     # sessions. Harmless (idle empty server) if there's nothing to restore.
+    # An already-running server predates any of the above, so re-source the
+    # config there instead: continuum only auto-restores on a server that
+    # started seconds ago, so this picks up the plugins without disturbing
+    # the sessions already open.
     if ! tmux has-session 2>/dev/null; then
         tmux start-server 2>/dev/null || true
+    else
+        tmux source-file "$USER_TMUX_CONF" 2>/dev/null || true
     fi
 fi
 
