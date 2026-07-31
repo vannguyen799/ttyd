@@ -17,6 +17,7 @@ import {
     nextSessionName,
     normalizeTabsState,
     saveTabsState,
+    spawnSearch,
     tabsInView,
 } from './tabs/model';
 import { fetchRemote, flushRemote, loadRev, nextRev, pushRemote, saveRev } from './tabs/sync';
@@ -254,10 +255,13 @@ export class App extends Component<Record<string, never>, AppState> {
         // the current "only this session" scope, and is named after that
         // namespace's default session (main-2, main-3, …) rather than a generic
         // tab-N, so the chip says which session it belongs to.
+        // It also inherits the active tab's working directory, so ＋ from a
+        // project deep-link (`?arg=cwd:/srv/app&…`) opens another terminal in
+        // that project rather than in ttyd's launch cwd.
         const active = this.activeTab(this.state);
         const group = active?.group;
         const session = nextSessionName(this.state.tabs, group || active?.session);
-        const tab = makeTab(session, `?arg=name:${session}`, session, group);
+        const tab = makeTab(session, spawnSearch(active?.search, session), session, group);
         this.scheduleSleep(prev);
         this.commit({
             ...this.state,

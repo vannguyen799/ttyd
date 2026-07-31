@@ -105,6 +105,35 @@ export function sessionFromSearch(search: string): string {
     }
 }
 
+// The working directory a WS query string routes to (`cwd:<path>`), or '' when
+// it carries none. `cwd:` is an order-independent modifier in ttyd-session.sh,
+// so the first one wins — same as the wrapper, where a later `cwd:` would only
+// chdir again on top of it.
+export function cwdFromSearch(search: string): string {
+    try {
+        const dir = new URLSearchParams(search).getAll('arg').find(a => a.startsWith('cwd:'));
+        return dir ? dir.slice('cwd:'.length) : '';
+    } catch {
+        return '';
+    }
+}
+
+// The query string for a tab spawned off `source` (the ＋ button). The new tab
+// is its own tmux session, so it gets a fresh `name:`, but it stays in the
+// directory the source tab routes to — otherwise "+" from a project deep-link
+// would drop you in ttyd's launch cwd instead of the project. Agent modifiers
+// (`claude:`/`codex:`) are deliberately *not* inherited: ＋ opens a plain shell,
+// and re-running e.g. `claude -c` would fork a second view of the very same
+// conversation. Values are encoded by URLSearchParams; ttyd url-decodes each
+// `arg=` fragment, so paths with spaces survive the round trip.
+export function spawnSearch(source: string | undefined, session: string): string {
+    const params = new URLSearchParams();
+    const cwd = cwdFromSearch(source || '');
+    if (cwd) params.append('arg', `cwd:${cwd}`);
+    params.append('arg', `name:${session}`);
+    return `?${params.toString()}`;
+}
+
 export function backendFromSearch(search: string): 'tmux' | 'screen' {
     try {
         const args = new URLSearchParams(search).getAll('arg');
