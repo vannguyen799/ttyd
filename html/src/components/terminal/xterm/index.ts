@@ -862,16 +862,41 @@ export class Xterm {
             if (!vp || terminal.rows <= 0) return 20;
             return vp.clientHeight / terminal.rows;
         };
+        // Where a synthesized wheel should "happen". Under tmux with mouse
+        // reporting on, xterm turns the wheel into an escape sequence carrying
+        // the cell coordinates, and tmux scrolls whichever pane sits under
+        // them — so aiming at the geometric centre scrolls whatever pane owns
+        // the middle of the window, not the one the user is working in.
+        // The terminal cursor is always inside tmux's active pane (including
+        // in copy-mode), so target its cell instead. Without tmux the
+        // coordinates are irrelevant: xterm just scrolls its own viewport.
+        const wheelPoint = (): { x: number; y: number } | null => {
+            const screen = (terminal.element?.querySelector('.xterm-screen') as HTMLElement | null) ?? null;
+            const rect = (screen ?? terminal.element)?.getBoundingClientRect();
+            if (!rect) return null;
+            if (terminal.cols <= 0 || terminal.rows <= 0) {
+                return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            }
+            const cw = rect.width / terminal.cols;
+            const ch = rect.height / terminal.rows;
+            const buf = terminal.buffer.active;
+            // cursorY is relative to baseY, not to what is currently scrolled
+            // into view; convert to an on-screen row before mapping to pixels.
+            const col = Math.min(Math.max(buf.cursorX, 0), terminal.cols - 1);
+            const row = Math.min(Math.max(buf.baseY + buf.cursorY - buf.viewportY, 0), terminal.rows - 1);
+            return { x: rect.left + (col + 0.5) * cw, y: rect.top + (row + 0.5) * ch };
+        };
         const dispatchWheel = (deltaY: number) => {
             const el = terminal.element;
             if (!el) return;
-            const rect = el.getBoundingClientRect();
+            const pt = wheelPoint();
+            if (!pt) return;
             el.dispatchEvent(
                 new WheelEvent('wheel', {
                     deltaY,
                     deltaMode: 0,
-                    clientX: rect.left + rect.width / 2,
-                    clientY: rect.top + rect.height / 2,
+                    clientX: pt.x,
+                    clientY: pt.y,
                     bubbles: true,
                     cancelable: true,
                 })
