@@ -1,13 +1,13 @@
 // macOS tab bar. Docks on any of the four edges (top/bottom horizontal strip;
 // left/right Edge-style vertical column) and has a collapsed "menu" mode.
 //
-// Glass is applied ONLY where a surface floats over terminal content — the
-// menu-mode FAB, the popovers, and the auto-hide strip (which is lifted out of
-// flow to overlay the terminal). A plain docked strip sits in its own layout
-// track with nothing but the page behind it, so see-through glass would buy
-// nothing and just cost a GPU blur pass; it stays a solid opaque bar.
+// The strip ALWAYS floats over the terminal: it is out of layout flow, pinned
+// to its dock edge, and its own fill is fully transparent so whatever the
+// terminal paints behind it is the bar's background. Only the chips and buttons
+// carry a surface; the bar itself is invisible chrome. Blur/glass is reserved
+// for the menu-mode FAB and the popovers, which need to stay legible over
+// arbitrary terminal output.
 $glass-blur: blur(40px) saturate(200%);
-$bar-bg: #1c1c20; // solid — the strip is docked, not overlaying content
 $bar-border: rgba(255, 255, 255, 0.12);
 $hairline: inset 0 1px 0 rgba(255, 255, 255, 0.16);
 
@@ -27,7 +27,7 @@ $muted: rgba(255, 255, 255, 0.5);
     align-items: center;
     gap: 5px;
     box-sizing: border-box;
-    background: $bar-bg;
+    background: transparent;
     color: $text;
     font-family:
         system-ui,
@@ -41,19 +41,11 @@ $muted: rgba(255, 255, 255, 0.5);
 }
 
 // ── Horizontal strip (top / bottom) ──────────────────────────────
-.tabbar-strip.tabbar-top {
-    padding: 4px 7px;
-    border-bottom: 1px solid $bar-border;
-    box-shadow:
-        $hairline,
-        0 6px 20px rgba(0, 0, 0, 0.3);
-}
+// No border and no drop shadow: both would draw a hard edge across live
+// terminal content and give away that there is a bar there at all.
+.tabbar-strip.tabbar-top,
 .tabbar-strip.tabbar-bottom {
     padding: 4px 7px;
-    border-top: 1px solid $bar-border;
-    box-shadow:
-        $hairline,
-        0 -6px 20px rgba(0, 0, 0, 0.3);
 }
 .tabbar-strip.tabbar-top,
 .tabbar-strip.tabbar-bottom {
@@ -86,18 +78,6 @@ $muted: rgba(255, 255, 255, 0.5);
     padding: 7px;
     gap: 5px;
 
-    &.tabbar-left {
-        border-right: 1px solid $bar-border;
-        box-shadow:
-            $hairline,
-            6px 0 20px rgba(0, 0, 0, 0.3);
-    }
-    &.tabbar-right {
-        border-left: 1px solid $bar-border;
-        box-shadow:
-            $hairline,
-            -6px 0 20px rgba(0, 0, 0, 0.3);
-    }
     .tabbar-tabs {
         display: flex;
         flex-direction: column;
@@ -160,18 +140,51 @@ $muted: rgba(255, 255, 255, 0.5);
     left: -5px;
 }
 
-// ── Auto-hide (overlay) ──────────────────────────────────────────
-// The bar collapses off its docked edge after a short idle and slides back when
-// the pointer dwells at that edge. In this mode it is taken OUT of layout flow
-// and pinned to its edge, floating ON the terminal: the stage keeps the whole
-// window, so the terminal never reflows as the bar slides in and out — and,
-// because there is finally content behind the bar, its translucent fill and
-// backdrop blur actually read as glass instead of tinting a dead layout track.
-.tabbar-strip.tabbar-autohide {
+// ── Overlay docking ──────────────────────────────────────────────
+// The strip is always out of layout flow and pinned to its dock edge, floating
+// ON the terminal rather than reserving a track beside it. The stage therefore
+// keeps the whole window: the terminal never reflows when the bar changes size,
+// switches edge, or (with auto-hide) slides in and out — and with the bar's own
+// fill transparent, the terminal simply shows through as its background.
+//
+// The insets come from a docked virtual keyboard (see index.scss) so the bar
+// stops short of it rather than disappearing underneath (vkbd z-index 70 > bar
+// 30). Bar `zoom` multiplies every length on the element, insets included, so a
+// raw dock inset would land at dock×scale. Dividing by --tabbar-zoom (set inline
+// next to the zoom itself) cancels that out and puts the bar exactly on the
+// keyboard's edge at any bar size.
+$inset-top: calc(var(--tabbar-inset-top, 0px) / var(--tabbar-zoom, 1));
+$inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
+
+.tabbar-strip {
     position: absolute;
-    background: rgba(28, 28, 32, 0.62);
-    backdrop-filter: $glass-blur;
-    -webkit-backdrop-filter: $glass-blur;
+
+    &.tabbar-top {
+        top: $inset-top;
+        left: 0;
+        right: 0;
+    }
+    &.tabbar-bottom {
+        bottom: $inset-bottom;
+        left: 0;
+        right: 0;
+    }
+    &.tabbar-left {
+        top: $inset-top;
+        bottom: $inset-bottom;
+        left: 0;
+    }
+    &.tabbar-right {
+        top: $inset-top;
+        bottom: $inset-bottom;
+        right: 0;
+    }
+}
+
+// ── Auto-hide ────────────────────────────────────────────────────
+// On top of the permanent overlay, collapse the bar off its docked edge after a
+// short idle and slide it back when the pointer dwells at that edge.
+.tabbar-strip.tabbar-autohide {
     transition:
         transform 0.24s ease,
         opacity 0.2s ease;
@@ -179,53 +192,17 @@ $muted: rgba(255, 255, 255, 0.5);
     &.hidden {
         opacity: 0;
         pointer-events: none;
-    }
-}
-// Pin each dock edge, then slide off that same edge when hidden. The insets come
-// from a docked virtual keyboard (see index.scss) so the overlay bar stops short
-// of it rather than disappearing underneath (vkbd z-index 70 > bar 30).
-//
-// Bar `zoom` multiplies every length on the element, insets included, so a raw
-// dock inset would land at dock×scale. Dividing by --tabbar-zoom (set inline
-// next to the zoom itself) cancels that out and puts the bar exactly on the
-// keyboard's edge at any bar size.
-$inset-top: calc(var(--tabbar-inset-top, 0px) / var(--tabbar-zoom, 1));
-$inset-bottom: calc(var(--tabbar-inset-bottom, 0px) / var(--tabbar-zoom, 1));
 
-.tabbar-strip.tabbar-autohide {
-    &.tabbar-top {
-        top: $inset-top;
-        left: 0;
-        right: 0;
-
-        &.hidden {
+        &.tabbar-top {
             transform: translateY(-100%);
         }
-    }
-    &.tabbar-bottom {
-        bottom: $inset-bottom;
-        left: 0;
-        right: 0;
-
-        &.hidden {
+        &.tabbar-bottom {
             transform: translateY(100%);
         }
-    }
-    &.tabbar-left {
-        top: $inset-top;
-        bottom: $inset-bottom;
-        left: 0;
-
-        &.hidden {
+        &.tabbar-left {
             transform: translateX(-100%);
         }
-    }
-    &.tabbar-right {
-        top: $inset-top;
-        bottom: $inset-bottom;
-        right: 0;
-
-        &.hidden {
+        &.tabbar-right {
             transform: translateX(100%);
         }
     }

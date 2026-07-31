@@ -420,9 +420,9 @@ export class TabBar extends Component<Props, State> {
         );
     }
 
-    // Toggle for the auto-hide behaviour. When on, the bar leaves the layout and
-    // floats over the terminal (translucent glass), collapsing off its edge after
-    // a short idle and sliding back when the pointer dwells at that edge.
+    // Toggle for the auto-hide behaviour. The bar always floats over the
+    // terminal; when this is on it additionally collapses off its edge after a
+    // short idle and slides back when the pointer dwells at that edge.
     private renderAutoHideControl() {
         const { autoHide, onSetAutoHide } = this.props;
         return (
@@ -588,8 +588,8 @@ export class TabBar extends Component<Props, State> {
         const { menuOpen, posOpen, hidden } = this.state;
         const active = tabs.find(t => t.id === activeId);
         const isColumn = position === 'left' || position === 'right';
-        // Real layout zoom (not transform) so the reflowed bar reserves the
-        // right amount of space in the app's flex column; plus the resizable
+        // Real layout zoom (not transform) so the bar's own contents reflow at
+        // the chosen size instead of being scaled pixels; plus the resizable
         // column width in left/right mode. An empty object leaves both unset.
         const rootStyle: JSX.CSSProperties = {};
         if (scale !== 1) {
@@ -599,7 +599,7 @@ export class TabBar extends Component<Props, State> {
             rootStyle['--tabbar-zoom' as keyof JSX.CSSProperties] = String(scale);
         }
         if (!menuMode && isColumn) rootStyle.width = `${colWidth}px`;
-        // Auto-hide needs no inline geometry: the bar leaves the flow, pins to its
+        // Auto-hide needs no inline geometry: the bar is already pinned to its
         // edge and slides off it with a transform — all in CSS (tabs/style.scss).
         const styleProp = Object.keys(rootStyle).length ? rootStyle : undefined;
         const autoHideCls = autoHide ? ` tabbar-autohide${hidden ? ' hidden' : ''}` : '';
