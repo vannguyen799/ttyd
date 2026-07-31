@@ -80,6 +80,9 @@ ttyd 1 "September 2016" ttyd "User Manual"
   -b, --base-path
       Expected base path for requests coming from a reverse proxy (eg: /mounted/here, max length: 128)
 
+  --tabs-file <file>
+      File the web UI stores its tab layout in, served over /tabs (default: disabled, layout stays per-browser)
+
   -P, --ping-interval
       Websocket ping interval(sec) (default: 5)
 

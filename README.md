@@ -17,8 +17,11 @@ deploy kit:
   `[Image #1]` chip via a tiny headless-X clipboard bridge.
 - 🔀 **URL-based session routing** — `?arg=work`, `?arg=claude&arg=dev`, `cwd:` modifiers, etc.,
   auto-attach to named `tmux`/`screen` sessions.
+- 💾 **Sessions that survive a reboot** — tmux window/pane layout is saved and restored, the tab
+  list lives on the server rather than in one browser, and `claude`/`codex` panes come back into
+  the conversation they were in instead of an empty one.
 - 🛠 **Deploy layer** — start/stop/status scripts that run a localhost-only ttyd backend behind a
-  public vkbd UI, with optional tmux session persistence across reboots.
+  public vkbd UI.
 
 > The C backend and protocol are unchanged from upstream ttyd. All fork additions live in the
 > `html/` front-end and the `deploy/` operational layer.
@@ -30,11 +33,12 @@ deploy kit:
 | Area | What ttyd-pro adds |
 |------|--------------------|
 | Virtual keyboard | Grouped/scalable keys, tmux scroll & copy-mode controls, Claude/Codex slash-command shortcuts, custom buttons, Android/iOS input fixes |
-| Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, per-tab sleep/wake |
+| Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, per-tab sleep/wake, server-side tab layout shared across devices (`--tabs-file`) |
 | Mobile | Auto-reconnect on tab re-activation, client-side auth-token persistence, no leave-site alert (tmux persists) |
 | Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, image paste-in |
 | tmux | Mouse-driven pane switching, drag-to-copy, wheel/prefix scroll into copy-mode, buffer→clipboard keys |
-| Deploy | One-command start of backend + UI, headless-X image bridge, tmux persistence, VPS bootstrap |
+| Persistence | Pane layout restored after a reboot (resurrect/continuum, installed automatically), agent panes resumed into their own `claude`/`codex` session |
+| Deploy | One-command start of backend + UI, headless-X image bridge, VPS bootstrap |
 
 The `deploy/` directory has its own [README](deploy/README.md) covering the runtime architecture,
 clipboard internals, session routing, and persistence in depth.

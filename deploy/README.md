@@ -227,6 +227,7 @@ your tmux sessions — down, and removes their private launcher scripts.
 │   /ws              → PTY                 │
 │   /token           → basic-auth token    │
 │   /clipboard-image → xclip (clipboard.c) │
+│   /tabs            → tab layout store    │
 └────────┬─────────────────────────────────┘
          │
          ▼
@@ -242,8 +243,8 @@ tree to deploy, no Node runtime on the box, and no second port to firewall.
 
 **Editing the front-end.** Rebuilding the binary on every CSS tweak is
 miserable, so `start-ttyd-ui.sh` still exists: it runs the webpack dev server
-(port 9000) with hot reload and proxies `/ws`, `/token` and `/clipboard-image`
-to the real ttyd. When you're happy, `yarn build` bakes the result back into
+(port 9000) with hot reload and proxies `/ws`, `/token`, `/clipboard-image`
+and `/tabs` to the real ttyd. When you're happy, `yarn build` bakes the result back into
 `src/html.h` and the next `start-ttyd.sh` picks it up.
 
 ---
@@ -393,7 +394,8 @@ rejected. Nothing is written to disk: the image is piped to `xclip` via stdin.
 ## Security Notes
 
 - **One exposed port**: ttyd binds `0.0.0.0:10090` by default. Pass `-b 127.0.0.1` to keep it local and reach it through a tunnel or reverse proxy instead.
-- **Password protection**: enabled by default with a random password. `/` and `/token` are gated by HTTP Basic Auth; `/clipboard-image` by the same credential, replayed by the client in an `Authorization` header.
+- **Password protection**: enabled by default with a random password. `/` and `/token` are gated by HTTP Basic Auth; `/clipboard-image` and `/tabs` by the same credential, replayed by the client in an `Authorization` header.
+- **Tab layout file**: written `0600` and never served anywhere but `/tabs`, because it names every session the user has open. Nothing else about a session is in it — no scrollback, no credentials.
 - **WebSocket auth**: the `/ws` upgrade deliberately does *not* require the `Authorization` header — WebKit never sends one on an upgrade, so requiring it locked out every iPhone and iPad. The gate is the `AuthToken` message instead: until it arrives and matches, ttyd refuses every other command and spawns no PTY. An unauthenticated peer can complete the handshake and nothing else.
 - **Disable auth** (optional): Use `-n` flag for open access
 
@@ -505,26 +507,31 @@ Examples:
 
 ## Session Persistence (survive reboots)
 
-By default tmux keeps sessions only in RAM — a reboot wipes them. To save
-sessions and auto-restore them on boot, the kit uses
-[tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) +
-[tmux-continuum](https://github.com/tmux-plugins/tmux-continuum), wired up
-the Nix way (no TPM).
+A restart of the service costs nothing — the sessions live in tmux and ttyd
+only attaches to them. A **reboot** is the real event: tmux keeps sessions in
+RAM only, so without this layer every window, pane and agent goes with it.
 
-**Setup:**
+Three things are saved, at three different levels:
 
-1. Add the plugins to `dev.nix` (already in `dev.nix.template`):
-   ```nix
-   pkgs.tmuxPlugins.resurrect
-   pkgs.tmuxPlugins.continuum
-   ```
-   Then rebuild the environment (IDX: Rebuild Environment).
+| Level | What is kept | Where |
+|--|--|--|
+| Browser tabs | which sessions are open, their order, names and the bar layout | `--tabs-file` on the server (see [Tab layout](#tab-layout-shared-across-devices)) |
+| tmux | window/pane layout, working dirs, scrollback, whitelisted programs | `~/.local/share/tmux/resurrect/` |
+| Agents | the claude/codex conversation each pane was in | the CLIs' own transcripts, referenced by session id |
 
-2. `start-ttyd.sh` does the rest automatically on every start:
-   - appends a `source-file .../deploy/config/tmux-persist.conf` line to
-     `~/.tmux.conf` (idempotent — runs once),
-   - starts the tmux server so continuum can **auto-restore** saved
-     sessions on boot, before any browser connects.
+The tmux half is [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect)
++ [tmux-continuum](https://github.com/tmux-plugins/tmux-continuum).
+
+**Setup:** none, `start-ttyd.sh` does it on every start:
+
+- appends a `source-file .../deploy/config/tmux-persist.conf` line to
+  `~/.tmux.conf` (idempotent — runs once),
+- makes sure both plugins are installed: the Nix profile is used when it has
+  them (`pkgs.tmuxPlugins.resurrect` / `.continuum` in `dev.nix`), otherwise
+  they are git-cloned into `~/.tmux/plugins/`,
+- symlinks the agent hook to `~/.tmux/ttyd-agent-hook.sh`,
+- starts the tmux server so continuum can **auto-restore** saved sessions on
+  boot, before any browser connects.
 
 **Behavior** (configured in `deploy/config/tmux-persist.conf`):
 
@@ -538,12 +545,78 @@ the Nix way (no TPM).
 time, and re-launch of whitelisted programs (`@resurrect-processes`
 includes `claude`, `codex`, `ssh`, `psql`, `node`, `python3`, `htop`).
 
-**What does NOT persist:** live in-memory state. Agents like `claude`/`codex`
-are re-launched **fresh** — their conversation/history is not restored.
+**What does NOT persist:** live in-memory state. A process is re-launched, not
+snapshotted, so anything a program held only in memory is gone — `htop` comes
+back at its default view, an `ssh` session re-connects from scratch.
 
 > Conflict with ttyd? **No.** resurrect/continuum operate at the tmux-server
 > level; ttyd only attaches to tmux. The wrapper's `tmux new -A` simply
 > attaches to whatever continuum restored.
+
+### Agent conversations across a reboot
+
+Agents are the exception to "re-launched fresh". `claude` and `codex` both keep
+their transcript on disk and can re-enter one by id, so the pane can come back
+into the same conversation — what is restored is the CLI's own saved history,
+not a live process.
+
+`resurrect-agent-hook.sh` runs as `@resurrect-hook-post-save-layout`,
+rewriting the agent panes in the save file just before it is finalised:
+
+```
+claude --dangerously-skip-permissions --session-id <id>
+  →  claude --dangerously-skip-permissions --resume <id>
+
+node /usr/bin/codex --search
+  →  node /usr/bin/codex resume --search <id>
+```
+
+Two ways the id is found:
+
+- **Pinned at launch.** `ttyd-session.sh` gives every claude pane it creates an
+  explicit `--session-id <uuid>`, so nothing has to be guessed for a session
+  opened from the web UI.
+- **Matched by directory.** For anything else — a hand-started agent, or codex,
+  which has no launch-time equivalent — the newest transcript recorded for the
+  pane's working directory wins (`~/.claude/projects/<slug>/<id>.jsonl`,
+  `~/.codex/sessions/**/rollout-*.jsonl`). Each id is handed out once per save,
+  so two agents in one directory take the two newest transcripts rather than
+  both resuming the same one.
+
+A pane with no transcript to point at is left exactly as resurrect saved it, so
+the worst case is the old behaviour: the agent starts empty.
+
+Inspect what a restore would do without touching anything:
+
+```bash
+deploy/scripts/resurrect-agent-hook.sh ~/.local/share/tmux/resurrect/last --dry-run
+```
+
+Flags are carried over, with one caveat: `codex resume` accepts a smaller set
+of options than `codex` itself, so a flag it does not take is dropped rather
+than guessed at (`codex resume --help` is the list).
+
+### Tab layout, shared across devices
+
+The web UI's tab list — which sessions are open, their order, their names, the
+bar position — is stored on the server when ttyd is started with `--tabs-file`,
+which `start-ttyd.sh` does by default:
+
+```
+~/.local/state/ttyd/tabs.json      # override with TTYD_TABS_FILE=, empty to disable
+```
+
+Without it the list lives only in that browser's `localStorage`: a phone and a
+laptop pointed at the same deployment show two unrelated sets of tabs, and
+clearing site data throws the list away while every tmux session behind it is
+still running.
+
+The endpoint is a single opaque JSON blob — `GET /tabs` to read, `POST /tabs`
+to replace — under the same auth as everything else, stored `0600` because the
+layout names every session the user has open. Each save carries a revision
+stamp and the newer one wins on load; there is no merge, so a layout edited on
+two devices at once resolves to whichever was touched last. A ttyd without
+`--tabs-file` answers `404` and the UI silently falls back to `localStorage`.
 
 ---
 
@@ -567,6 +640,7 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     │   ├── start-ttyd-ui.sh  # DEV ONLY: webpack hot-reload server on :9000
     │   ├── stop-ttyd-ui.sh   # Stop the dev server
     │   ├── start-clipboard-x.sh # Headless X (:77) holding the paste clipboard
+    │   ├── resurrect-agent-hook.sh # Restore claude/codex panes into their own conversation
     │   └── ttyd-session.sh   # URL-arg routing → tmux / screen
     └── README.md             # This file
 ```
