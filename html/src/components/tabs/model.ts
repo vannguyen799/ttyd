@@ -192,7 +192,15 @@ export function loadTabsState(): TabsState {
     } catch {
         saved = null;
     }
+    return normalizeTabsState(saved);
+}
 
+// Turn a stored (or received) tab list into one this page can render: fill in
+// defaults, repair anything missing, and reconcile it with the URL the page was
+// opened at. Shared by the localStorage load and by the server sync, which
+// hands over a list written by a different browser and so needs exactly the
+// same treatment.
+export function normalizeTabsState(saved: TabsState | null): TabsState {
     if (!saved || !Array.isArray(saved.tabs) || saved.tabs.length === 0) {
         const first = initialTabFromUrl();
         return { tabs: [first], activeId: first.id, bar: defaultBar() };

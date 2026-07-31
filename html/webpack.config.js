@@ -108,7 +108,7 @@ const devConfig = {
         // does instead of a second, drifting implementation.
         proxy: [
             {
-                context: ['/token', '/ws', '/clipboard-image'],
+                context: ['/token', '/ws', '/clipboard-image', '/tabs'],
                 target: TTYD_ORIGIN,
                 ws: true,
                 // Safari/iOS (WebKit) does not send the Authorization header on

@@ -24,6 +24,7 @@ struct endpoints {
   char *token;
   char *parent;
   char *clipboard;
+  char *tabs;
 };
 
 extern volatile bool force_exit;
@@ -31,23 +32,31 @@ extern struct lws_context *context;
 extern struct server *server;
 extern struct endpoints endpoints;
 
+// What a POST body being accumulated is destined for. NONE means the request
+// has no body we care about, so anything it sends is dropped on the floor.
+enum post_kind { POST_NONE, POST_CLIPBOARD, POST_TABS };
+
 struct pss_http {
   char path[128];
   char *buffer;
   char *ptr;
   size_t len;
 
-  // /clipboard-image: the POST body is accumulated here, handed to xclip, and
-  // answered from a libuv callback — hence the stored wsi to wake writes on.
+  // POST body accumulator, shared by /clipboard-image and /tabs. The clipboard
+  // answers from a libuv callback once xclip has the image — hence the stored
+  // wsi to wake writes on.
   struct lws *wsi;
-  bool clip_request;
+  enum post_kind post;
   char *body;
   size_t body_len;
+  size_t body_max;
   bool body_too_large;
   clipboard_req *clip;
-  bool clip_reply;
-  int clip_status;
-  char clip_error[128];
+  // A queued JSON answer ({"ok": true} / {"error": "…"}), written out on the
+  // next writable callback.
+  bool json_reply;
+  int json_status;
+  char json_error[128];
 };
 
 struct pss_tty {
@@ -81,6 +90,7 @@ struct server {
   char *credential;        // encoded basic auth credential
   char *auth_header;       // header name used for auth proxy
   char *index;             // custom index.html
+  char *tabs_file;         // where the UI's tab layout is stored (NULL = /tabs disabled)
   char *command;           // full command line
   char **argv;             // command with arguments
   int argc;                // command + arguments count

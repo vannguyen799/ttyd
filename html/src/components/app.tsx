@@ -13,9 +13,11 @@ import {
     loadTabsState,
     makeTab,
     nextSessionName,
+    normalizeTabsState,
     saveTabsState,
     tabsInView,
 } from './tabs/model';
+import { fetchRemote, flushRemote, loadRev, nextRev, pushRemote, saveRev } from './tabs/sync';
 
 import type { ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { ClientOptions, FlowControl } from './terminal/xterm';
@@ -98,10 +100,14 @@ interface AppState extends TabsState {
 export class App extends Component<Record<string, never>, AppState> {
     // Pending sleep timers, keyed by tab id.
     private sleepTimers = new Map<string, number>();
+    // The durable layout as last written out, so publish() can tell a real edit
+    // from a re-commit of the same thing.
+    private published = '';
 
     constructor() {
         super();
         const base = loadTabsState();
+        this.published = JSON.stringify({ tabs: base.tabs, activeId: base.activeId, bar: base.bar });
         // Only the active tab starts live; the rest wake lazily when visited.
         this.state = { ...base, live: [base.activeId] };
         // Publish before the first render so the vkbd's initial paint already
@@ -110,9 +116,62 @@ export class App extends Component<Record<string, never>, AppState> {
         this.syncUrlTab(base.activeId);
     }
 
+    componentDidMount() {
+        // The local list is already on screen; if the server holds a newer one
+        // (another device moved on since this browser last looked), swap to it.
+        void this.syncFromServer();
+        window.addEventListener('pagehide', flushRemote);
+    }
+
     componentWillUnmount() {
         for (const h of this.sleepTimers.values()) window.clearTimeout(h);
         this.sleepTimers.clear();
+        window.removeEventListener('pagehide', flushRemote);
+        flushRemote();
+    }
+
+    // Reconcile with the deployment-wide tab layout. Whichever side was edited
+    // more recently wins outright — see tabs/sync.ts on why this is not a merge.
+    private async syncFromServer() {
+        const remote = await fetchRemote();
+        if (remote === null) return; // no endpoint, or nothing stored yet
+
+        const localRev = loadRev();
+        if (remote.rev <= localRev) {
+            // Our copy is the newer one — make sure the server has it, which
+            // also covers the very first run after --tabs-file is switched on.
+            if (localRev > remote.rev) this.publish(this.state, localRev, true);
+            return;
+        }
+
+        // normalize, not adopt-as-is: the incoming list was written by another
+        // browser, so it still has to be reconciled with this page's URL (a
+        // deep-linked ?arg= session must stay open and focused).
+        const adopted = normalizeTabsState(remote.state);
+        saveRev(remote.rev);
+        saveTabsState(adopted);
+        this.published = JSON.stringify({ tabs: adopted.tabs, activeId: adopted.activeId, bar: adopted.bar });
+        this.applyActiveGlobals(adopted);
+        this.syncUrlTab(adopted.activeId);
+        for (const id of this.sleepTimers.keys()) this.cancelSleep(id);
+        this.setState({ ...adopted, live: [adopted.activeId] });
+    }
+
+    // Hand the durable part of a state to both stores. The revision is what
+    // the next reconcile compares against, so it is written alongside.
+    //
+    // Unchanged payloads are dropped: commit() also runs for things that are
+    // not edits at all — a tab going to sleep after three idle minutes — and
+    // stamping a fresh revision for those would let a browser sitting untouched
+    // in the background outrank a device someone is actually using.
+    private publish(s: TabsState, rev: number, force = false) {
+        const durable = { tabs: s.tabs, activeId: s.activeId, bar: s.bar };
+        const json = JSON.stringify(durable);
+        if (!force && json === this.published) return;
+        this.published = json;
+        saveTabsState(durable);
+        saveRev(rev);
+        pushRemote({ rev, state: durable });
     }
 
     private activeTab(s: TabsState): TabInfo | undefined {
@@ -159,7 +218,7 @@ export class App extends Component<Record<string, never>, AppState> {
     private commit(next: AppState) {
         this.applyActiveGlobals(next);
         // Persist only the durable tab data, never the ephemeral live set.
-        saveTabsState({ tabs: next.tabs, activeId: next.activeId, bar: next.bar });
+        this.publish(next, nextRev());
         this.syncUrlTab(next.activeId);
         this.setState(next);
     }

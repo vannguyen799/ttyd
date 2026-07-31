@@ -1,5 +1,11 @@
+#include <errno.h>
+#include <json.h>
 #include <libwebsockets.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <zlib.h>
 
 #include "clipboard.h"
@@ -12,6 +18,10 @@ enum { AUTH_OK, AUTH_FAIL, AUTH_ERROR };
 // Cap on an accepted paste. Screenshots are far below this; the limit exists
 // because the handler sits on the same port as the terminal.
 #define MAX_IMAGE_BYTES (12 * 1024 * 1024)
+
+// Cap on a stored tab layout. A few hundred tabs still fit comfortably; the
+// point is that an unauthenticated-looking POST can't grow a file forever.
+#define MAX_TABS_BYTES (1024 * 1024)
 
 static char *html_cache = NULL;
 static size_t html_cache_len = 0;
@@ -88,21 +98,21 @@ static void pss_buffer_free(struct pss_http *pss) {
   if (pss->buffer != (char *)index_html && pss->buffer != html_cache) free(pss->buffer);
 }
 
-// Queue the JSON answer to a /clipboard-image POST. The message ends up
-// inside a JSON string and part of it comes from xclip, so strip anything
+// Queue the JSON answer to a POST. The message ends up inside a JSON string
+// and part of it comes from elsewhere (xclip, strerror), so strip anything
 // that would break out of the quotes.
-static void clipboard_result(struct pss_http *pss, int status, const char *error) {
+static void json_result(struct pss_http *pss, int status, const char *error) {
   size_t i = 0;
   if (error != NULL) {
-    for (; error[i] != '\0' && i < sizeof(pss->clip_error) - 1; i++) {
+    for (; error[i] != '\0' && i < sizeof(pss->json_error) - 1; i++) {
       char c = error[i];
-      pss->clip_error[i] = (c == '"' || c == '\\' || (unsigned char)c < 0x20) ? ' ' : c;
+      pss->json_error[i] = (c == '"' || c == '\\' || (unsigned char)c < 0x20) ? ' ' : c;
     }
   }
-  pss->clip_error[i] = '\0';
+  pss->json_error[i] = '\0';
 
-  pss->clip_status = status;
-  pss->clip_reply = true;
+  pss->json_status = status;
+  pss->json_reply = true;
   lws_callback_on_writable(pss->wsi);
 }
 
@@ -110,10 +120,10 @@ static void clipboard_done(void *ctx, int status, const char *error) {
   struct pss_http *pss = (struct pss_http *)ctx;
 
   pss->clip = NULL;
-  clipboard_result(pss, status == 0 ? HTTP_STATUS_OK : HTTP_STATUS_INTERNAL_SERVER_ERROR, error);
+  json_result(pss, status == 0 ? HTTP_STATUS_OK : HTTP_STATUS_INTERNAL_SERVER_ERROR, error);
 }
 
-static void clipboard_reset(struct pss_http *pss) {
+static void request_reset(struct pss_http *pss) {
   if (pss->clip != NULL) {
     clipboard_detach(pss->clip);
     pss->clip = NULL;
@@ -121,9 +131,95 @@ static void clipboard_reset(struct pss_http *pss) {
   free(pss->body);
   pss->body = NULL;
   pss->body_len = 0;
+  pss->body_max = 0;
   pss->body_too_large = false;
-  pss->clip_request = false;
-  pss->clip_reply = false;
+  pss->post = POST_NONE;
+  pss->json_reply = false;
+}
+
+// Whole-file read, used to answer GET /tabs. Returns a NUL-terminated buffer
+// the caller owns, or NULL when the file is missing or unreadable — which is
+// not an error: a deployment that has never saved a layout simply has no file
+// yet.
+static char *read_file(const char *path, size_t *out_len) {
+  FILE *fp = fopen(path, "rb");
+  if (fp == NULL) return NULL;
+
+  if (fseek(fp, 0, SEEK_END) != 0) {
+    fclose(fp);
+    return NULL;
+  }
+  long size = ftell(fp);
+  if (size < 0 || size > MAX_TABS_BYTES || fseek(fp, 0, SEEK_SET) != 0) {
+    fclose(fp);
+    return NULL;
+  }
+
+  char *buf = xmalloc((size_t)size + 1);
+  size_t n = fread(buf, 1, (size_t)size, fp);
+  fclose(fp);
+  buf[n] = '\0';
+  *out_len = n;
+  return buf;
+}
+
+// Replace `path` with `data`. Written to a sibling temp file and renamed, so a
+// reader (or a crash) never sees a half-written layout — losing the tab list
+// to a torn write would be worse than not saving it at all. Returns an errno
+// on failure, 0 on success.
+static int write_file_atomic(const char *path, const char *data, size_t len) {
+  char *tmp = xmalloc(strlen(path) + 8);
+  sprintf(tmp, "%s.XXXXXX", path);
+
+  int fd = mkstemp(tmp);
+  if (fd < 0) {
+    int err = errno;
+    free(tmp);
+    return err;
+  }
+
+  int err = 0;
+  size_t off = 0;
+  while (off < len) {
+    ssize_t written = write(fd, data + off, len - off);
+    if (written < 0) {
+      err = errno;
+      break;
+    }
+    off += (size_t)written;
+  }
+  if (err == 0 && fsync(fd) != 0) err = errno;
+  if (close(fd) != 0 && err == 0) err = errno;
+
+  if (err == 0) {
+    // 0600: the layout names every session the user has open.
+    if (chmod(tmp, S_IRUSR | S_IWUSR) != 0) err = errno;
+  }
+  if (err == 0 && rename(tmp, path) != 0) err = errno;
+  if (err != 0) unlink(tmp);
+
+  free(tmp);
+  return err;
+}
+
+// Store the body of a POST /tabs. The blob is opaque to the server — only the
+// UI knows what a tab is — but it has to be valid JSON, so a malformed request
+// can't leave the file unparseable for every future reader.
+static void tabs_store(struct pss_http *pss) {
+  struct json_object *parsed = json_tokener_parse(pss->body);
+  if (parsed == NULL) {
+    json_result(pss, HTTP_STATUS_BAD_REQUEST, "not valid json");
+    return;
+  }
+  json_object_put(parsed);
+
+  int err = write_file_atomic(server->tabs_file, pss->body, pss->body_len);
+  if (err != 0) {
+    lwsl_err("tabs: cannot write %s: %s\n", server->tabs_file, strerror(err));
+    json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, strerror(err));
+    return;
+  }
+  json_result(pss, HTTP_STATUS_OK, NULL);
 }
 
 static void access_log(struct lws *wsi, const char *path) {
@@ -144,7 +240,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       access_log(wsi, (const char *)in);
       snprintf(pss->path, sizeof(pss->path), "%s", (const char *)in);
       pss->wsi = wsi;
-      clipboard_reset(pss);  // the connection may be reused across requests
+      request_reset(pss);  // the connection may be reused across requests
       switch (check_auth(wsi, pss)) {
         case AUTH_OK:
           break;
@@ -185,8 +281,51 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
           goto try_to_reuse;
         }
         // Answer from LWS_CALLBACK_HTTP_BODY_COMPLETION, once xclip has it.
-        pss->clip_request = true;
+        pss->post = POST_CLIPBOARD;
+        pss->body_max = MAX_IMAGE_BYTES;
         return 0;
+      }
+
+      // Tab layout. localStorage keeps the tab list per browser, so the same
+      // deployment opened from a phone and a laptop shows two unrelated sets
+      // of tabs and a cleared cache loses them. This is where the UI parks the
+      // list instead: a single opaque JSON blob, GET to read, POST to replace.
+      // Off unless the deployment named a file to keep it in.
+      if (strcmp(pss->path, endpoints.tabs) == 0) {
+        if (server->tabs_file == NULL) {
+          lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
+          goto try_to_reuse;
+        }
+        if (lws_hdr_total_length(wsi, WSI_TOKEN_POST_URI) > 0) {
+          // Answered from LWS_CALLBACK_HTTP_BODY_COMPLETION.
+          pss->post = POST_TABS;
+          pss->body_max = MAX_TABS_BYTES;
+          return 0;
+        }
+
+        size_t saved_len = 0;
+        char *saved = read_file(server->tabs_file, &saved_len);
+        if (saved == NULL) {
+          // Nothing saved yet — an empty object, so the client can treat "no
+          // layout on the server" the same as "a layout with nothing in it".
+          saved = strdup("{}");
+          saved_len = 2;
+        }
+        if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
+                                         (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CACHE_CONTROL, (unsigned char *)"no-store", 8, &p, end) ||
+            lws_add_http_header_content_length(wsi, (unsigned long)saved_len, &p, end) ||
+            lws_finalize_http_header(wsi, &p, end) ||
+            lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0) {
+          free(saved);
+          return 1;
+        }
+
+        pss->buffer = pss->ptr = saved;
+        pss->len = saved_len;
+        lws_callback_on_writable(wsi);
+        break;
       }
 
       // redirects `/base-path` to `/base-path/`
@@ -240,12 +379,12 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 
     case LWS_CALLBACK_HTTP_BODY:
       // lws signals a bodyless POST with a zero-length chunk and a NULL `in`.
-      if (!pss->clip_request || pss->body_too_large || len == 0) break;
+      if (pss->post == POST_NONE || pss->body_too_large || len == 0) break;
 
       // Overshooting the cap discards what was buffered: the body is useless
       // now, and holding it would let a single request pin the memory until
       // the client finishes uploading.
-      if (pss->body_len + len > MAX_IMAGE_BYTES) {
+      if (pss->body_len + len > pss->body_max) {
         pss->body_too_large = true;
         free(pss->body);
         pss->body = NULL;
@@ -253,18 +392,23 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         break;
       }
 
-      pss->body = xrealloc(pss->body, pss->body_len + len);
+      // One extra byte, always kept NUL: the tabs handler parses the body as a
+      // C string and a JSON parser must not run off the end of it.
+      pss->body = xrealloc(pss->body, pss->body_len + len + 1);
       memcpy(pss->body + pss->body_len, in, len);
       pss->body_len += len;
+      pss->body[pss->body_len] = '\0';
       break;
 
     case LWS_CALLBACK_HTTP_BODY_COMPLETION:
-      if (!pss->clip_request) goto try_to_reuse;
+      if (pss->post == POST_NONE) goto try_to_reuse;
 
       if (pss->body_too_large) {
-        clipboard_result(pss, HTTP_STATUS_REQ_ENTITY_TOO_LARGE, "image too large");
+        json_result(pss, HTTP_STATUS_REQ_ENTITY_TOO_LARGE, "body too large");
       } else if (pss->body_len == 0) {
-        clipboard_result(pss, HTTP_STATUS_BAD_REQUEST, "empty body");
+        json_result(pss, HTTP_STATUS_BAD_REQUEST, "empty body");
+      } else if (pss->post == POST_TABS) {
+        tabs_store(pss);
       } else {
         int err = 0;
         char *data = pss->body;
@@ -274,27 +418,27 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 
         pss->clip = clipboard_set_image(server->loop, data, data_len, clipboard_done, pss, &err);
         if (pss->clip == NULL)
-          clipboard_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR,
-                           err == UV_ENOENT ? "xclip not installed" : uv_strerror(err));
+          json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                      err == UV_ENOENT ? "xclip not installed" : uv_strerror(err));
       }
       return 0;
 
     case LWS_CALLBACK_CLOSED_HTTP:
-      clipboard_reset(pss);
+      request_reset(pss);
       break;
 
     case LWS_CALLBACK_HTTP_WRITEABLE:
-      if (pss->clip_reply) {
-        pss->clip_reply = false;
-        pss->clip_request = false;
+      if (pss->json_reply) {
+        pss->json_reply = false;
+        pss->post = POST_NONE;
 
-        size_t n = pss->clip_status == HTTP_STATUS_OK
+        size_t n = pss->json_status == HTTP_STATUS_OK
                        ? (size_t)snprintf(buf, sizeof(buf), "{\"ok\": true}")
-                       : (size_t)snprintf(buf, sizeof(buf), "{\"error\": \"%s\"}", pss->clip_error);
+                       : (size_t)snprintf(buf, sizeof(buf), "{\"error\": \"%s\"}", pss->json_error);
 
         p = buffer + LWS_PRE;
         end = p + sizeof(buffer) - LWS_PRE;
-        if (lws_add_http_header_status(wsi, (unsigned int)pss->clip_status, &p, end) ||
+        if (lws_add_http_header_status(wsi, (unsigned int)pss->json_status, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
                                          (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
             lws_add_http_header_content_length(wsi, (unsigned long)n, &p, end) ||

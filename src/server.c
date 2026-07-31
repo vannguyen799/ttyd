@@ -21,7 +21,7 @@
 volatile bool force_exit = false;
 struct lws_context *context;
 struct server *server;
-struct endpoints endpoints = {"/ws", "/", "/token", "", "/clipboard-image"};
+struct endpoints endpoints = {"/ws", "/", "/token", "", "/clipboard-image", "/tabs"};
 
 extern int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
 extern int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
@@ -51,6 +51,10 @@ static lws_retry_bo_t retry = {
 };
 #endif
 
+// Options with no short form. Numbered past the ASCII range so getopt_long
+// hands them back without colliding with a letter.
+enum { OPT_TABS_FILE = 1000 };
+
 // command line options
 static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"interface", required_argument, NULL, 'i'},
@@ -63,6 +67,9 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"cwd", required_argument, NULL, 'w'},
                                         {"index", required_argument, NULL, 'I'},
                                         {"base-path", required_argument, NULL, 'b'},
+                                        // Long-only: the short letters worth having are all taken, and
+                                        // this is a deployment detail rather than something typed by hand.
+                                        {"tabs-file", required_argument, NULL, OPT_TABS_FILE},
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
                                         {"ping-interval", required_argument, NULL, 'P'},
 #endif
@@ -115,6 +122,7 @@ static void print_help() {
           "    -B, --browser           Open terminal with the default system browser\n"
           "    -I, --index             Custom index.html path\n"
           "    -b, --base-path         Expected base path for requests coming from a reverse proxy (eg: /mounted/here, max length: 128)\n"
+          "        --tabs-file         File the web UI stores its tab layout in, served over /tabs (default: disabled, layout stays per-browser)\n"
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
           "    -P, --ping-interval     Websocket ping interval(sec) (default: 5)\n"
 #endif
@@ -150,7 +158,9 @@ static void print_config() {
     lwsl_notice("  token    : %s\n", endpoints.token);
     lwsl_notice("  websocket: %s\n", endpoints.ws);
     lwsl_notice("  clipboard: %s\n", endpoints.clipboard);
+    lwsl_notice("  tabs     : %s\n", endpoints.tabs);
   }
+  if (server->tabs_file != NULL) lwsl_notice("  tab layout file: %s\n", server->tabs_file);
   if (server->auth_header != NULL) lwsl_notice("  auth header: %s\n", server->auth_header);
   if (server->check_origin) lwsl_notice("  check origin: true\n");
   if (server->url_arg) lwsl_notice("  allow url arg: true\n");
@@ -210,6 +220,7 @@ static void server_free(struct server *ts) {
   if (ts->credential != NULL) free(ts->credential);
   if (ts->auth_header != NULL) free(ts->auth_header);
   if (ts->index != NULL) free(ts->index);
+  if (ts->tabs_file != NULL) free(ts->tabs_file);
   if (ts->cwd != NULL) free(ts->cwd);
   free(ts->command);
   free(ts->prefs_json);
@@ -445,6 +456,35 @@ int main(int argc, char **argv) {
           return -1;
         }
         break;
+      case OPT_TABS_FILE: {
+        // Where /tabs keeps the UI's tab layout. Same ~/ handling as --index,
+        // since this is normally pointed at a state dir under $HOME. The file
+        // itself is created on the first POST; only its directory has to
+        // exist, and it is checked now rather than failing silently later.
+        if (!strncmp(optarg, "~/", 2)) {
+          const char *home = getenv("HOME");
+          if (home == NULL) {
+            fprintf(stderr, "ttyd: cannot expand ~ in --tabs-file: HOME is unset\n");
+            return -1;
+          }
+          size_t len = strlen(home) + strlen(optarg);
+          server->tabs_file = xmalloc(len);
+          snprintf(server->tabs_file, len, "%s%s", home, optarg + 1);
+        } else {
+          server->tabs_file = strdup(optarg);
+        }
+        char *slash = strrchr(server->tabs_file, '/');
+        if (slash != NULL && slash != server->tabs_file) {
+          *slash = '\0';
+          struct stat ds;
+          int missing = stat(server->tabs_file, &ds) == -1 || !S_ISDIR(ds.st_mode);
+          *slash = '/';
+          if (missing) {
+            fprintf(stderr, "ttyd: --tabs-file directory does not exist: %s\n", server->tabs_file);
+            return -1;
+          }
+        }
+      } break;
       case 'b': {
         char path[128];
         strncpy(path, optarg, 128);
@@ -454,7 +494,7 @@ int main(int argc, char **argv) {
 #define sc(f)                                  \
   strncpy(path + len, endpoints.f, 128 - len); \
   endpoints.f = strdup(path);
-        sc(ws) sc(index) sc(token) sc(parent) sc(clipboard)
+        sc(ws) sc(index) sc(token) sc(parent) sc(clipboard) sc(tabs)
 #undef sc
       } break;
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000

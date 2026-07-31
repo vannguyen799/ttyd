@@ -6,8 +6,8 @@
 # the installer to regenerate it.
 #
 # One process serves everything: the vkbd UI baked into src/html.h, the
-# terminal WebSocket and /clipboard-image. There is no webpack proxy and no
-# Node runtime in the deployment.
+# terminal WebSocket, /clipboard-image and the /tabs layout store. There is no
+# webpack proxy and no Node runtime in the deployment.
 
 [Unit]
 Description=ttyd web terminal (UI + WebSocket + image paste, one process)

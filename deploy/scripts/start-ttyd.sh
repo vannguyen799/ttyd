@@ -24,6 +24,9 @@
 #   TTYD_BIND                  Bind address (overridden by -b)
 #   TTYD_BIN                   ttyd binary to run (default: the fork's build)
 #   TTYD_SESSION_ARGS          Default wrapper args (overridden by -- ARG...)
+#   TTYD_TABS_FILE             Where the UI stores its tab layout
+#                              (default: ~/.local/state/ttyd/tabs.json,
+#                              empty = keep the layout per-browser)
 # ══════════════════════════════════════════════════════════════
 
 PIDFILE_TTYD="/tmp/ttyd.pid"
@@ -409,6 +412,19 @@ COMMON_OPTS=(-p "$PORT" -i "$BIND" -W -a
     -t "cursorBlink=true"
     -t "macOptionClickForcesSelection=true"
 )
+
+# Tab layout storage. Without this the UI keeps its tab list in localStorage,
+# so the same deployment opened on a phone and a laptop shows two unrelated
+# sets of tabs and clearing site data loses the list while every tmux session
+# behind it keeps running. Set TTYD_TABS_FILE= (empty) to opt back out.
+TABS_FILE="${TTYD_TABS_FILE-$HOME/.local/state/ttyd/tabs.json}"
+if [ -n "$TABS_FILE" ]; then
+    if mkdir -p "$(dirname "$TABS_FILE")" 2>/dev/null; then
+        COMMON_OPTS+=(--tabs-file "$TABS_FILE")
+    else
+        echo -e "${YELLOW}Warning: cannot create $(dirname "$TABS_FILE") — tab layout stays per-browser${NC}"
+    fi
+fi
 # Credential file. ttyd itself does not read it — it only exists for the
 # webpack dev server (start-ttyd-ui.sh), which still proxies to this instance
 # when you are iterating on html/. Keep it in sync so switching to dev mode
