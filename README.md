@@ -33,7 +33,7 @@ deploy kit:
 | Area | What ttyd-pro adds |
 |------|--------------------|
 | Virtual keyboard | Grouped/scalable keys, tmux scroll & copy-mode controls, Claude/Codex slash-command shortcuts, custom buttons, Android/iOS input fixes |
-| Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, per-tab sleep/wake, server-side tab layout shared across devices (`--tabs-file`) |
+| Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, new tabs inherit the active tab's `cwd:`, per-tab sleep/wake, server-side tab layout shared across devices (`--tabs-file`) |
 | Mobile | Auto-reconnect on tab re-activation, client-side auth-token persistence, no leave-site alert (tmux persists) |
 | Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, image paste-in |
 | tmux | Mouse-driven pane switching, drag-to-copy, wheel/prefix scroll into copy-mode, buffer→clipboard keys |
