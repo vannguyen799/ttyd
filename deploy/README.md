@@ -537,9 +537,15 @@ The tmux half is [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect
 
 | | |
 |--|--|
-| Auto-save | every 15 min (`@continuum-save-interval`) |
+| Auto-save | every 5 min (`@continuum-save-interval`) |
 | Auto-restore | on tmux server start (`@continuum-restore on`) |
+| Backups kept | 7 days (`@resurrect-delete-backup-after`) |
 | Manual save / restore | `prefix + Ctrl-s` / `prefix + Ctrl-r` |
+
+The save interval is in whole **minutes**, and 5 is near the floor: continuum
+hangs its save off a `status-right` interpolation rather than a timer, so it
+is only evaluated once per `status-interval`, and a fractional value silently
+disables auto-saving instead of going sub-minute.
 
 **What persists:** window/pane layout, working dirs, scrollback at save
 time, and re-launch of whitelisted programs (`@resurrect-processes`
