@@ -225,8 +225,41 @@ resolve_ttyd_bin() {
     echo -e "${GREEN}✓ built $TTYD_BIN${NC}"
 }
 
+# Repair a stale libwebsockets RUNPATH.
+#
+# On a nix-backed box (this workspace) the binary is linked with a RUNPATH that
+# pins the exact /nix/store/<hash>-libwebsockets-<ver> directory present at build
+# time. When that store path is later collected or rotated to a new version, the
+# binary still asks for the dead path and dies at exec with
+# "libwebsockets.so.19: cannot open shared object file" — which is what took the
+# terminal down after the 2026-08-01 reboot (4.3.2 built, 4.3.5 installed).
+#
+# /usr/lib/libwebsockets.so.19 is the stable, version-agnostic handle: it is a
+# symlink that always points at whichever store path is current. Resolving it at
+# START time and prepending its directory means a rotated store path is picked up
+# on the next restart instead of bricking the binary.
+#
+# Only prepend the libwebsockets dir, never the aggregate idx-env lib dir — that
+# one also carries a libc.so.6 that conflicts with the binary's own glibc
+# ("undefined symbol: __tunable_is_initialized").
+#
+# No-op when the binary loads fine (a non-nix VPS, or a still-valid RUNPATH).
+repair_lws_runpath() {
+    "$TTYD_BIN" --version >/dev/null 2>&1 && return 0
+
+    local lws_dir
+    lws_dir=$(dirname "$(readlink -f /usr/lib/libwebsockets.so.19 2>/dev/null)" 2>/dev/null)
+    [ -f "$lws_dir/libwebsockets.so.19" ] || return 0
+
+    export LD_LIBRARY_PATH="$lws_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    if "$TTYD_BIN" --version >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ libwebsockets resolved via $lws_dir (build-time RUNPATH is stale)${NC}"
+    fi
+}
+
 # Ensure dependencies (auto-install if missing)
 resolve_ttyd_bin || exit 1
+repair_lws_runpath
 ensure_package "tmux" "tmux" || echo -e "${YELLOW}Warning: tmux missing, default sessions will fall back to shell${NC}"
 command -v screen >/dev/null 2>&1 || echo -e "${YELLOW}Warning: screen not installed, /screen/<name> routes will fall back to shell${NC}"
 # Clipboard bridge deps — optional: only browser image paste depends on them.
