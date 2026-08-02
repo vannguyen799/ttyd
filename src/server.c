@@ -4,6 +4,7 @@
 #include <getopt.h>
 #include <json.h>
 #include <libwebsockets.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -13,6 +14,13 @@
 
 #include "utils.h"
 #include "compat.h"
+
+#ifdef _WIN32
+#include <direct.h>
+#define ttyd_mkdir(path) _mkdir(path)
+#else
+#define ttyd_mkdir(path) mkdir(path, 0700)
+#endif
 
 #ifndef TTYD_VERSION
 #define TTYD_VERSION "unknown"
@@ -53,7 +61,12 @@ static lws_retry_bo_t retry = {
 
 // Options with no short form. Numbered past the ASCII range so getopt_long
 // hands them back without colliding with a letter.
-enum { OPT_TABS_FILE = 1000 };
+enum { OPT_TABS_FILE = 1000, OPT_SESSION_FILE, OPT_AUTH_MAX_AGE };
+
+// How long a login is remembered by default. Browsers forget basic-auth
+// credentials on a whim, and every time they do it is another password prompt;
+// a month of not being asked is the point of the cookie.
+#define DEFAULT_AUTH_MAX_AGE (30 * 24 * 60 * 60)
 
 // command line options
 static const struct option options[] = {{"port", required_argument, NULL, 'p'},
@@ -70,6 +83,8 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         // Long-only: the short letters worth having are all taken, and
                                         // this is a deployment detail rather than something typed by hand.
                                         {"tabs-file", required_argument, NULL, OPT_TABS_FILE},
+                                        {"session-file", required_argument, NULL, OPT_SESSION_FILE},
+                                        {"auth-max-age", required_argument, NULL, OPT_AUTH_MAX_AGE},
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
                                         {"ping-interval", required_argument, NULL, 'P'},
 #endif
@@ -123,6 +138,8 @@ static void print_help() {
           "    -I, --index             Custom index.html path\n"
           "    -b, --base-path         Expected base path for requests coming from a reverse proxy (eg: /mounted/here, max length: 128)\n"
           "        --tabs-file         File the web UI stores its tab layout in, served over /tabs (default: disabled, layout stays per-browser)\n"
+          "        --auth-max-age      How long a successful login is remembered in a cookie, suffix s/m/h/d (default: 30d, use `0` to ask for the password every time the browser forgets it)\n"
+          "        --session-file      File the issued login sessions are kept in, so they survive a restart (default: $XDG_STATE_HOME/ttyd/sessions, use `''` to keep them in memory only)\n"
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
           "    -P, --ping-interval     Websocket ping interval(sec) (default: 5)\n"
 #endif
@@ -162,6 +179,14 @@ static void print_config() {
   }
   if (server->tabs_file != NULL) lwsl_notice("  tab layout file: %s\n", server->tabs_file);
   if (server->auth_header != NULL) lwsl_notice("  auth header: %s\n", server->auth_header);
+  if (server->credential != NULL) {
+    if (server->auth_max_age > 0) {
+      lwsl_notice("  login remembered for: %d seconds\n", server->auth_max_age);
+      lwsl_notice("  session file: %s\n", server->session_file != NULL ? server->session_file : "(memory only)");
+    } else {
+      lwsl_notice("  login remembered for: disabled\n");
+    }
+  }
   if (server->check_origin) lwsl_notice("  check origin: true\n");
   if (server->url_arg) lwsl_notice("  allow url arg: true\n");
   if (server->max_clients > 0) lwsl_notice("  max clients: %d\n", server->max_clients);
@@ -181,6 +206,7 @@ static struct server *server_new(int argc, char **argv, int start) {
   memset(ts, 0, sizeof(struct server));
   ts->client_count = 0;
   ts->sig_code = SIGHUP;
+  ts->auth_max_age = DEFAULT_AUTH_MAX_AGE;
   snprintf(ts->terminal_type, sizeof(ts->terminal_type), "%s", "xterm-256color");
   get_sig_name(ts->sig_code, ts->sig_name, sizeof(ts->sig_name));
   if (start == argc) return ts;
@@ -221,6 +247,7 @@ static void server_free(struct server *ts) {
   if (ts->auth_header != NULL) free(ts->auth_header);
   if (ts->index != NULL) free(ts->index);
   if (ts->tabs_file != NULL) free(ts->tabs_file);
+  if (ts->session_file != NULL) free(ts->session_file);
   if (ts->cwd != NULL) free(ts->cwd);
   free(ts->command);
   free(ts->prefs_json);
@@ -274,6 +301,95 @@ static int parse_int(char *name, char *str) {
     exit(EXIT_FAILURE);
   }
   return (int)val;
+}
+
+// A count of seconds, or one with an s/m/h/d suffix — `30d` says what it means
+// in a unit file, `2592000` does not. Returns -1 on anything unparseable.
+static int parse_duration(const char *name, const char *str) {
+  char *endptr;
+  errno = 0;
+  long val = strtol(str, &endptr, 10);
+  if (errno != 0 || endptr == str || val < 0) goto invalid;
+
+  long mult = 1;
+  switch (*endptr) {
+    case 'd':
+      mult = 24 * 60 * 60;
+      endptr++;
+      break;
+    case 'h':
+      mult = 60 * 60;
+      endptr++;
+      break;
+    case 'm':
+      mult = 60;
+      endptr++;
+      break;
+    case 's':
+      endptr++;
+      break;
+    case '\0':
+      break;
+    default:
+      goto invalid;
+  }
+  if (*endptr != '\0' || val > INT_MAX / mult) goto invalid;
+
+  return (int)(val * mult);
+
+invalid:
+  fprintf(stderr, "ttyd: invalid value for %s: %s\n", name, str);
+  return -1;
+}
+
+// Expand ~/ and make sure the directory is there, for the options that name a
+// file ttyd only creates later (the tab layout, the session list). Returns a
+// path the caller owns, or NULL after printing what was wrong with it.
+static char *resolve_file_option(const char *name, const char *value) {
+  char *path;
+  if (!strncmp(value, "~/", 2)) {
+    const char *home = getenv("HOME");
+    if (home == NULL) {
+      fprintf(stderr, "ttyd: cannot expand ~ in %s: HOME is unset\n", name);
+      return NULL;
+    }
+    size_t len = strlen(home) + strlen(value);
+    path = xmalloc(len);
+    snprintf(path, len, "%s%s", home, value + 1);
+  } else {
+    path = strdup(value);
+  }
+
+  char *slash = strrchr(path, '/');
+  if (slash != NULL && slash != path) {
+    *slash = '\0';
+    struct stat st;
+    int missing = stat(path, &st) == -1 || !S_ISDIR(st.st_mode);
+    *slash = '/';
+    if (missing) {
+      fprintf(stderr, "ttyd: %s directory does not exist: %s\n", name, path);
+      free(path);
+      return NULL;
+    }
+  }
+
+  return path;
+}
+
+// mkdir -p, used only for the state dir ttyd picks itself. 0700 because what
+// lands there — who is logged in — is nobody else's business.
+static bool make_dirs(const char *path) {
+  char tmp[1024];
+  snprintf(tmp, sizeof(tmp), "%s", path);
+
+  for (char *p = tmp + 1; *p != '\0'; p++) {
+    if (*p != '/') continue;
+    *p = '\0';
+    if (ttyd_mkdir(tmp) != 0 && errno != EEXIST) return false;
+    *p = '/';
+  }
+
+  return ttyd_mkdir(tmp) == 0 || errno == EEXIST;
 }
 
 static int calc_command_start(int argc, char **argv) {
@@ -347,6 +463,7 @@ int main(int argc, char **argv) {
   char socket_owner[128] = "";
   bool browser = false;
   bool ssl = false;
+  bool session_file_set = false;
   char cert_path[1024] = "";
   char key_path[1024] = "";
   char ca_path[1024] = "";
@@ -456,35 +573,25 @@ int main(int argc, char **argv) {
           return -1;
         }
         break;
-      case OPT_TABS_FILE: {
-        // Where /tabs keeps the UI's tab layout. Same ~/ handling as --index,
-        // since this is normally pointed at a state dir under $HOME. The file
-        // itself is created on the first POST; only its directory has to
-        // exist, and it is checked now rather than failing silently later.
-        if (!strncmp(optarg, "~/", 2)) {
-          const char *home = getenv("HOME");
-          if (home == NULL) {
-            fprintf(stderr, "ttyd: cannot expand ~ in --tabs-file: HOME is unset\n");
-            return -1;
-          }
-          size_t len = strlen(home) + strlen(optarg);
-          server->tabs_file = xmalloc(len);
-          snprintf(server->tabs_file, len, "%s%s", home, optarg + 1);
-        } else {
-          server->tabs_file = strdup(optarg);
-        }
-        char *slash = strrchr(server->tabs_file, '/');
-        if (slash != NULL && slash != server->tabs_file) {
-          *slash = '\0';
-          struct stat ds;
-          int missing = stat(server->tabs_file, &ds) == -1 || !S_ISDIR(ds.st_mode);
-          *slash = '/';
-          if (missing) {
-            fprintf(stderr, "ttyd: --tabs-file directory does not exist: %s\n", server->tabs_file);
-            return -1;
-          }
-        }
-      } break;
+      case OPT_TABS_FILE:
+        // Where /tabs keeps the UI's tab layout. The file itself is created on
+        // the first POST; only its directory has to exist, and it is checked
+        // now rather than failing silently later.
+        server->tabs_file = resolve_file_option("--tabs-file", optarg);
+        if (server->tabs_file == NULL) return -1;
+        break;
+      case OPT_SESSION_FILE:
+        // An empty value means "keep them in memory": sessions then last until
+        // ttyd restarts, which costs one password prompt and nothing else.
+        session_file_set = true;
+        if (optarg[0] == '\0') break;
+        server->session_file = resolve_file_option("--session-file", optarg);
+        if (server->session_file == NULL) return -1;
+        break;
+      case OPT_AUTH_MAX_AGE:
+        server->auth_max_age = parse_duration("auth-max-age", optarg);
+        if (server->auth_max_age < 0) return -1;
+        break;
       case 'b': {
         char path[128];
         strncpy(path, optarg, 128);
@@ -574,6 +681,29 @@ int main(int argc, char **argv) {
   }
 
   lws_set_log_level(debug_level, NULL);
+
+  // Remembering a login only means something if the tokens outlive the
+  // process — otherwise every restart is another password prompt, which is the
+  // thing the cookie exists to stop. So unless the deployment named a file, or
+  // asked for none, keep them in the user's state dir.
+  if (server->credential != NULL && server->auth_max_age > 0 && !session_file_set) {
+    const char *state = getenv("XDG_STATE_HOME");
+    const char *home = getenv("HOME");
+    char dir[1024] = "";
+
+    if (state != NULL && state[0] != '\0')
+      snprintf(dir, sizeof(dir), "%s/ttyd", state);
+    else if (home != NULL && home[0] != '\0')
+      snprintf(dir, sizeof(dir), "%s/.local/state/ttyd", home);
+
+    if (dir[0] != '\0' && make_dirs(dir)) {
+      size_t len = strlen(dir) + sizeof("/sessions");
+      server->session_file = xmalloc(len);
+      snprintf(server->session_file, len, "%s/sessions", dir);
+    } else {
+      lwsl_warn("no state dir for login sessions, they will not survive a restart\n");
+    }
+  }
 
   char server_hdr[128] = "";
   snprintf(server_hdr, sizeof(server_hdr), "ttyd/%s (libwebsockets/%s)", TTYD_VERSION, LWS_LIBRARY_VERSION);

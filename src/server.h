@@ -57,6 +57,10 @@ struct pss_http {
   bool json_reply;
   int json_status;
   char json_error[128];
+  // Session token this response has to hand back in a Set-Cookie, empty when
+  // there is nothing to send: the request either arrived with a cookie that is
+  // still good for a while, or it is not authenticated at all.
+  char cookie[65];
 };
 
 struct pss_tty {
@@ -91,6 +95,8 @@ struct server {
   char *auth_header;       // header name used for auth proxy
   char *index;             // custom index.html
   char *tabs_file;         // where the UI's tab layout is stored (NULL = /tabs disabled)
+  char *session_file;      // where issued login sessions are kept (NULL = memory only)
+  int auth_max_age;        // how long a login cookie stays valid, in seconds (0 = no cookie)
   char *command;           // full command line
   char **argv;             // command with arguments
   int argc;                // command + arguments count

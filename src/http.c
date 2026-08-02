@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -23,40 +24,20 @@ enum { AUTH_OK, AUTH_FAIL, AUTH_ERROR };
 // point is that an unauthenticated-looking POST can't grow a file forever.
 #define MAX_TABS_BYTES (1024 * 1024)
 
+// Name of the cookie a successful basic-auth hands back, and the size of the
+// random token inside it. 32 bytes is far past guessing range, and the hex
+// form keeps the cookie printable.
+#define AUTH_COOKIE "ttyd_session"
+#define SESSION_TOKEN_BYTES 32
+#define SESSION_TOKEN_HEX (SESSION_TOKEN_BYTES * 2)
+
+// How many logins stay valid at once. One per browser that has ever signed in
+// and not expired — a phone, a laptop, a few private windows. Past this the
+// oldest is dropped rather than growing the file without bound.
+#define MAX_SESSIONS 32
+
 static char *html_cache = NULL;
 static size_t html_cache_len = 0;
-
-static int send_unauthorized(struct lws *wsi, unsigned int code, enum lws_token_indexes header) {
-  unsigned char buffer[1024 + LWS_PRE], *p, *end;
-  p = buffer + LWS_PRE;
-  end = p + sizeof(buffer) - LWS_PRE;
-
-  if (lws_add_http_header_status(wsi, code, &p, end) ||
-      lws_add_http_header_by_token(wsi, header, (unsigned char *)"Basic realm=\"ttyd\"", 18, &p, end) ||
-      lws_add_http_header_content_length(wsi, 0, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
-      lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
-    return AUTH_FAIL;
-
-  return lws_http_transaction_completed(wsi) ? AUTH_FAIL : AUTH_ERROR;
-}
-
-static int check_auth(struct lws *wsi, struct pss_http *pss) {
-  if (server->auth_header != NULL) {
-    if (lws_hdr_custom_length(wsi, server->auth_header, strlen(server->auth_header)) > 0) return AUTH_OK;
-    return send_unauthorized(wsi, HTTP_STATUS_PROXY_AUTH_REQUIRED, WSI_TOKEN_HTTP_PROXY_AUTHENTICATE);
-  }
-
-  if(server->credential != NULL) {
-    char buf[256];
-    int len = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    if (len >= 7 && strstr(buf, "Basic ")) {
-      if (!strcmp(buf + 6, server->credential)) return AUTH_OK;
-    }
-    return send_unauthorized(wsi, HTTP_STATUS_UNAUTHORIZED, WSI_TOKEN_HTTP_WWW_AUTHENTICATE);
-  }
-
-  return AUTH_OK;
-}
 
 static bool accept_gzip(struct lws *wsi) {
   char buf[256];
@@ -135,12 +116,13 @@ static void request_reset(struct pss_http *pss) {
   pss->body_too_large = false;
   pss->post = POST_NONE;
   pss->json_reply = false;
+  pss->cookie[0] = '\0';
 }
 
-// Whole-file read, used to answer GET /tabs. Returns a NUL-terminated buffer
-// the caller owns, or NULL when the file is missing or unreadable — which is
-// not an error: a deployment that has never saved a layout simply has no file
-// yet.
+// Whole-file read, used to answer GET /tabs and to load the session list.
+// Returns a NUL-terminated buffer the caller owns, or NULL when the file is
+// missing or unreadable — which is not an error: a deployment that has never
+// saved a layout, or never had anyone log in, simply has no file yet.
 static char *read_file(const char *path, size_t *out_len) {
   FILE *fp = fopen(path, "rb");
   if (fp == NULL) return NULL;
@@ -202,6 +184,269 @@ static int write_file_atomic(const char *path, const char *data, size_t len) {
   return err;
 }
 
+// ── login sessions ─────────────────────────────────────────────────────────
+//
+// Basic auth alone means a password prompt every time the browser forgets the
+// credential, which it does often: a restart, a fresh PWA window, a phone that
+// dropped the tab. So the first successful basic-auth also hands out a cookie
+// holding a random token, and any later request carrying that token is let
+// through without the header. The tokens live here, not in the cookie, so
+// deleting the file logs every browser out.
+
+struct auth_session {
+  char token[SESSION_TOKEN_HEX + 1];
+  long long expiry;  // unix seconds
+};
+
+static struct auth_session sessions[MAX_SESSIONS];
+static int session_count = 0;
+static bool sessions_loaded = false;
+
+enum { SESSION_UNKNOWN, SESSION_OK, SESSION_RENEWED };
+
+// FNV-1a over the encoded credential. Written into the session file so that a
+// changed password invalidates every token issued under the old one — the
+// stored list is only meaningful for the credential that created it.
+static unsigned long long cred_fingerprint(void) {
+  unsigned long long h = 1469598103934665603ULL;
+  for (const char *s = server->credential != NULL ? server->credential : ""; *s != '\0'; s++) {
+    h ^= (unsigned char)*s;
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+static bool is_hex_token(const char *s) {
+  for (size_t i = 0; i < SESSION_TOKEN_HEX; i++) {
+    char c = s[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  }
+  return s[SESSION_TOKEN_HEX] == '\0';
+}
+
+static void sessions_load(void) {
+  if (sessions_loaded) return;
+  sessions_loaded = true;  // a missing or unreadable file just means no sessions yet
+  if (server->session_file == NULL) return;
+
+  size_t len = 0;
+  char *data = read_file(server->session_file, &len);
+  if (data == NULL) return;
+
+  char *save = NULL;
+  char *line = strtok_r(data, "\n", &save);
+  unsigned long long stored = 0;
+  if (line == NULL || sscanf(line, "ttyd-session 1 %llu", &stored) != 1 || stored != cred_fingerprint()) {
+    free(data);
+    return;
+  }
+
+  long long now = (long long)time(NULL);
+  while ((line = strtok_r(NULL, "\n", &save)) != NULL && session_count < MAX_SESSIONS) {
+    char token[SESSION_TOKEN_HEX + 1];
+    long long expiry;
+    if (sscanf(line, "%64s %lld", token, &expiry) != 2) continue;
+    if (!is_hex_token(token) || expiry <= now) continue;
+    memcpy(sessions[session_count].token, token, sizeof(token));
+    sessions[session_count].expiry = expiry;
+    session_count++;
+  }
+
+  free(data);
+}
+
+static void sessions_save(void) {
+  if (server->session_file == NULL) return;
+
+  size_t cap = 64 + (size_t)session_count * (SESSION_TOKEN_HEX + 24);
+  char *buf = xmalloc(cap);
+  size_t n = (size_t)snprintf(buf, cap, "ttyd-session 1 %llu\n", cred_fingerprint());
+  for (int i = 0; i < session_count; i++)
+    n += (size_t)snprintf(buf + n, cap - n, "%s %lld\n", sessions[i].token, sessions[i].expiry);
+
+  int err = write_file_atomic(server->session_file, buf, n);
+  // Not fatal: the sessions still work for as long as this process runs, they
+  // just won't survive a restart.
+  if (err != 0) lwsl_warn("session: cannot write %s: %s\n", server->session_file, strerror(err));
+  free(buf);
+}
+
+static bool sessions_prune(long long now) {
+  int kept = 0;
+  for (int i = 0; i < session_count; i++)
+    if (sessions[i].expiry > now) sessions[kept++] = sessions[i];
+
+  bool dropped = kept != session_count;
+  session_count = kept;
+  return dropped;
+}
+
+// Fixed-length compare that always walks the whole token, so how long the
+// answer takes says nothing about how much of a guess was right.
+static bool token_equal(const char *a, const char *b) {
+  unsigned char diff = 0;
+  for (size_t i = 0; i < SESSION_TOKEN_HEX; i++) diff |= (unsigned char)(a[i] ^ b[i]);
+  return diff == 0;
+}
+
+// Look a cookie token up. Past the halfway mark the deadline is pushed back
+// (and the caller re-sends the cookie), so a browser in regular use never sees
+// the password prompt again while one that stops coming back still expires on
+// schedule.
+static int session_accept(const char *token) {
+  sessions_load();
+
+  long long now = (long long)time(NULL);
+  bool dirty = sessions_prune(now);
+  int result = SESSION_UNKNOWN;
+
+  for (int i = 0; i < session_count; i++) {
+    if (!token_equal(sessions[i].token, token)) continue;
+    result = SESSION_OK;
+    if (sessions[i].expiry - now < server->auth_max_age / 2) {
+      sessions[i].expiry = now + server->auth_max_age;
+      result = SESSION_RENEWED;
+      dirty = true;
+    }
+    break;
+  }
+
+  if (dirty) sessions_save();
+  return result;
+}
+
+// Mint a token for a browser that just proved it knows the password. Writes
+// SESSION_TOKEN_HEX + 1 bytes into `out`; leaves it empty if the platform
+// could not give us enough randomness, in which case the login still works,
+// it just doesn't get a cookie.
+static void session_issue(char *out) {
+  unsigned char raw[SESSION_TOKEN_BYTES];
+  if (lws_get_random(context, raw, sizeof(raw)) != sizeof(raw)) {
+    lwsl_warn("session: no randomness available, issuing no cookie\n");
+    out[0] = '\0';
+    return;
+  }
+
+  static const char hex[] = "0123456789abcdef";
+  for (size_t i = 0; i < sizeof(raw); i++) {
+    out[i * 2] = hex[raw[i] >> 4];
+    out[i * 2 + 1] = hex[raw[i] & 0xf];
+  }
+  out[SESSION_TOKEN_HEX] = '\0';
+
+  sessions_load();
+  long long now = (long long)time(NULL);
+  sessions_prune(now);
+
+  if (session_count == MAX_SESSIONS) {
+    int oldest = 0;
+    for (int i = 1; i < session_count; i++)
+      if (sessions[i].expiry < sessions[oldest].expiry) oldest = i;
+    memmove(&sessions[oldest], &sessions[oldest + 1], (size_t)(session_count - oldest - 1) * sizeof(sessions[0]));
+    session_count--;
+  }
+
+  memcpy(sessions[session_count].token, out, SESSION_TOKEN_HEX + 1);
+  sessions[session_count].expiry = now + server->auth_max_age;
+  session_count++;
+  sessions_save();
+}
+
+// Pull our token out of the Cookie header, into a buffer of at least
+// SESSION_TOKEN_HEX + 1 bytes. Anything the wrong length is not a token we
+// ever issued, so it is treated as absent.
+static bool cookie_token(struct lws *wsi, char *out) {
+  char buf[1024];
+  if (lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_COOKIE) <= 0) return false;
+
+  for (char *p = buf; p != NULL && *p != '\0';) {
+    while (*p == ' ' || *p == ';') p++;
+    char *sep = strchr(p, ';');
+    if (sep != NULL) *sep = '\0';
+
+    if (!strncmp(p, AUTH_COOKIE "=", sizeof(AUTH_COOKIE))) {
+      char *value = p + sizeof(AUTH_COOKIE);
+      if (strlen(value) != SESSION_TOKEN_HEX) return false;
+      memcpy(out, value, SESSION_TOKEN_HEX + 1);
+      return true;
+    }
+    p = sep != NULL ? sep + 1 : NULL;
+  }
+
+  return false;
+}
+
+// Attach the Set-Cookie for a session just issued or renewed. Path is the base
+// path, so a ttyd mounted under a prefix does not hand its cookie to the rest
+// of the site. Secure only when the request actually arrived over TLS: the
+// usual deployment is plain HTTP behind a tunnel, and a browser drops a Secure
+// cookie that came over http — which would mean the password prompt forever.
+static int add_session_cookie(struct lws *wsi, struct pss_http *pss, unsigned char **p, unsigned char *end) {
+  if (pss->cookie[0] == '\0') return 0;
+
+  char proto[16];
+  bool secure = lws_is_ssl(wsi) || (lws_hdr_custom_copy(wsi, proto, sizeof(proto), "x-forwarded-proto:", 18) > 0 &&
+                                    !strcmp(proto, "https"));
+
+  char value[256];
+  int n = snprintf(value, sizeof(value), "%s=%s; Path=%s; Max-Age=%d; HttpOnly; SameSite=Lax%s", AUTH_COOKIE,
+                   pss->cookie, endpoints.parent[0] ? endpoints.parent : "/", server->auth_max_age,
+                   secure ? "; Secure" : "");
+
+  return lws_add_http_header_by_name(wsi, (unsigned char *)"set-cookie:", (unsigned char *)value, n, p, end);
+}
+
+static int send_unauthorized(struct lws *wsi, unsigned int code, enum lws_token_indexes header) {
+  unsigned char buffer[1024 + LWS_PRE], *p, *end;
+  p = buffer + LWS_PRE;
+  end = p + sizeof(buffer) - LWS_PRE;
+
+  if (lws_add_http_header_status(wsi, code, &p, end) ||
+      lws_add_http_header_by_token(wsi, header, (unsigned char *)"Basic realm=\"ttyd\"", 18, &p, end) ||
+      lws_add_http_header_content_length(wsi, 0, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
+      lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
+    return AUTH_FAIL;
+
+  return lws_http_transaction_completed(wsi) ? AUTH_FAIL : AUTH_ERROR;
+}
+
+static int check_auth(struct lws *wsi, struct pss_http *pss) {
+  if (server->auth_header != NULL) {
+    if (lws_hdr_custom_length(wsi, server->auth_header, strlen(server->auth_header)) > 0) return AUTH_OK;
+    return send_unauthorized(wsi, HTTP_STATUS_PROXY_AUTH_REQUIRED, WSI_TOKEN_HTTP_PROXY_AUTHENTICATE);
+  }
+
+  if(server->credential != NULL) {
+    // A cookie from an earlier login stands in for the credential. An unknown
+    // one is not an error — it may be from before a password change — it just
+    // falls through to the header check below.
+    char token[SESSION_TOKEN_HEX + 1];
+    if (server->auth_max_age > 0 && cookie_token(wsi, token)) {
+      switch (session_accept(token)) {
+        case SESSION_RENEWED:
+          memcpy(pss->cookie, token, sizeof(token));
+          return AUTH_OK;
+        case SESSION_OK:
+          return AUTH_OK;
+        default:
+          break;
+      }
+    }
+
+    char buf[256];
+    int len = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
+    if (len >= 7 && strstr(buf, "Basic ")) {
+      if (!strcmp(buf + 6, server->credential)) {
+        if (server->auth_max_age > 0) session_issue(pss->cookie);
+        return AUTH_OK;
+      }
+    }
+    return send_unauthorized(wsi, HTTP_STATUS_UNAUTHORIZED, WSI_TOKEN_HTTP_WWW_AUTHENTICATE);
+  }
+
+  return AUTH_OK;
+}
+
 // Store the body of a POST /tabs. The blob is opaque to the server — only the
 // UI knows what a tab is — but it has to be valid JSON, so a malformed request
 // can't leave the file unparseable for every future reader.
@@ -260,6 +505,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
                                          (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
+            add_session_cookie(wsi, pss, &p, end) ||
             lws_add_http_header_content_length(wsi, (unsigned long)n, &p, end) ||
             lws_finalize_http_header(wsi, &p, end) ||
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
@@ -315,6 +561,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
                                          (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CACHE_CONTROL, (unsigned char *)"no-store", 8, &p, end) ||
+            add_session_cookie(wsi, pss, &p, end) ||
             lws_add_http_header_content_length(wsi, (unsigned long)saved_len, &p, end) ||
             lws_finalize_http_header(wsi, &p, end) ||
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0) {
@@ -333,6 +580,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         if (lws_add_http_header_status(wsi, HTTP_STATUS_FOUND, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_LOCATION, (unsigned char *)endpoints.index,
                                          (int)strlen(endpoints.index), &p, end) ||
+            add_session_cookie(wsi, pss, &p, end) ||
             lws_add_http_header_content_length(wsi, 0, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
           return 1;
@@ -346,6 +594,9 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 
       const char *content_type = "text/html";
       if (server->index != NULL) {
+        // No Set-Cookie here: lws owns the whole header block for a served
+        // file. A custom index still gets one, from the /token request the UI
+        // makes as soon as it loads.
         int n = lws_serve_http_file(wsi, server->index, content_type, NULL, 0);
         if (n < 0 || (n > 0 && lws_http_transaction_completed(wsi))) return 1;
       } else {
@@ -353,7 +604,8 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         size_t output_len = index_html_len;
         if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE, (const unsigned char *)content_type, 9, &p,
-                                         end))
+                                         end) ||
+            add_session_cookie(wsi, pss, &p, end))
           return 1;
 #ifdef LWS_WITH_HTTP_STREAM_COMPRESSION
         if (!uncompress_html(&output, &output_len)) return 1;
@@ -441,6 +693,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         if (lws_add_http_header_status(wsi, (unsigned int)pss->json_status, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
                                          (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
+            add_session_cookie(wsi, pss, &p, end) ||
             lws_add_http_header_content_length(wsi, (unsigned long)n, &p, end) ||
             lws_finalize_http_header(wsi, &p, end) ||
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
