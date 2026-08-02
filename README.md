@@ -35,6 +35,7 @@ deploy kit:
 | Virtual keyboard | Grouped/scalable keys, tmux scroll & copy-mode controls, Claude/Codex slash-command shortcuts, custom buttons, Android/iOS input fixes |
 | Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, new tabs inherit the active tab's `cwd:`, per-tab sleep/wake, server-side tab layout shared across devices (`--tabs-file`) |
 | Mobile | Auto-reconnect on tab re-activation, client-side auth-token persistence, no leave-site alert (tmux persists) |
+| Auth | One password prompt per 30 days instead of one per browser restart — a successful login gets a `HttpOnly` session cookie that survives a ttyd restart (`--auth-max-age`, `--session-file`) |
 | Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, image paste-in |
 | tmux | Mouse-driven pane switching, drag-to-copy, wheel/prefix scroll into copy-mode, buffer→clipboard keys |
 | Persistence | Pane layout restored after a reboot (resurrect/continuum, installed automatically), agent panes resumed into their own `claude`/`codex` session |

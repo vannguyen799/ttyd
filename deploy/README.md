@@ -395,6 +395,18 @@ rejected. Nothing is written to disk: the image is piped to `xclip` via stdin.
 
 - **One exposed port**: ttyd binds `0.0.0.0:10090` by default. Pass `-b 127.0.0.1` to keep it local and reach it through a tunnel or reverse proxy instead.
 - **Password protection**: enabled by default with a random password. `/` and `/token` are gated by HTTP Basic Auth; `/clipboard-image` and `/tabs` by the same credential, replayed by the client in an `Authorization` header.
+- **Remembered logins**: browsers forget basic-auth credentials constantly — a restart, a new PWA window, an iOS tab that got evicted — and each time the native password prompt comes back. So a successful login also gets a `ttyd_session` cookie (`HttpOnly`, `SameSite=Lax`, `Secure` when the request arrived over TLS or through a proxy that set `X-Forwarded-Proto: https`), good for **30 days** and renewed whenever it is more than half used up. The cookie carries only a random token; the tokens themselves live in `$XDG_STATE_HOME/ttyd/sessions` (`~/.local/state/ttyd/sessions`, `0600`), so a ttyd restart does not log anyone out.
+
+  ```bash
+  # Log every browser out, everywhere
+  rm ~/.local/state/ttyd/sessions
+
+  # Shorter window, or back to a prompt every time the browser forgets
+  ttyd --auth-max-age 12h ...
+  ttyd --auth-max-age 0 ...
+  ```
+
+  Changing the password invalidates every cookie issued under the old one. The 30-day window is inactivity-based: a browser that stops coming back expires on schedule.
 - **Tab layout file**: written `0600` and never served anywhere but `/tabs`, because it names every session the user has open. Nothing else about a session is in it — no scrollback, no credentials.
 - **WebSocket auth**: the `/ws` upgrade deliberately does *not* require the `Authorization` header — WebKit never sends one on an upgrade, so requiring it locked out every iPhone and iPad. The gate is the `AuthToken` message instead: until it arrives and matches, ttyd refuses every other command and spawns no PTY. An unauthenticated peer can complete the handshake and nothing else.
 - **Disable auth** (optional): Use `-n` flag for open access

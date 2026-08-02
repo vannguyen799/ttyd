@@ -83,6 +83,12 @@ ttyd 1 "September 2016" ttyd "User Manual"
   --tabs-file <file>
       File the web UI stores its tab layout in, served over /tabs (default: disabled, layout stays per-browser)
 
+  --auth-max-age <duration>
+      How long a successful login is remembered in a cookie, suffix s/m/h/d (default: 30d, use `0` to ask for the password every time the browser forgets it)
+
+  --session-file <file>
+      File the issued login sessions are kept in, so they survive a restart (default: $XDG_STATE_HOME/ttyd/sessions, use `''` to keep them in memory only)
+
   -P, --ping-interval
       Websocket ping interval(sec) (default: 5)
 
