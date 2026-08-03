@@ -1,4 +1,5 @@
 import type { KeyDef } from './types';
+import { parseRoute } from '../tabs/model';
 
 const STORAGE_KEY = 'ttyd.vkbd.v1';
 
@@ -148,58 +149,24 @@ export function genId(): string {
     return `c:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function sanitizeName(s: string): string {
-    return s.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
-}
-
 export function ttydSessionName(): string {
     // With multiple tabs the active tab's session is published to a global by
     // App (window.ttydSession); it wins over the page URL so per-session input
     // history/drafts and the label follow the active tab. Falls back to the URL
-    // for the single-terminal / no-tabs case.
+    // for the single-terminal / no-tabs case. The URL fallback goes through the
+    // same parseRoute() the tab model uses, so it can never disagree with what
+    // ttyd-session.sh actually attaches to.
     try {
         const active = (window as unknown as { ttydSession?: string }).ttydSession;
         if (typeof active === 'string' && active) return active;
     } catch {
         // ignore
     }
-    try {
-        const args = new URLSearchParams(window.location.search).getAll('arg');
-        // Explicit `name:` modifier wins, mirroring ttyd-session.sh.
-        const named = args.find(a => a.startsWith('name:'));
-        if (named !== undefined) {
-            return sanitizeName(named.slice('name:'.length)) || 'main';
-        }
-        let i = 0;
-        while (i < args.length) {
-            const a = args[i];
-            if (
-                a.startsWith('cwd:') ||
-                a === 'codex' ||
-                a.startsWith('codex:') ||
-                a === 'claude' ||
-                a.startsWith('claude:')
-            ) {
-                i++;
-            } else {
-                break;
-            }
-        }
-        const rest = args.slice(i);
-        if (rest.length === 0) return 'main';
-        if (rest[0] === 'screen' || rest[0] === 'tmux') {
-            return sanitizeName(rest[1] ?? '') || 'main';
-        }
-        return sanitizeName(rest[0]) || 'main';
-    } catch {
-        return 'main';
-    }
+    return parseRoute(window.location.search).session;
 }
 
 // Which multiplexer the ttyd wrapper (ttyd-session.sh) routes this tab to.
 // tmux is the default backend; only an explicit `screen` arg switches it.
-// Leading modifiers (cwd:/name:/codex/claude) are skipped, mirroring
-// ttydSessionName() and the wrapper script.
 export function ttydSessionBackend(): 'tmux' | 'screen' {
     try {
         const active = (window as unknown as { ttydBackend?: 'tmux' | 'screen' }).ttydBackend;
@@ -207,28 +174,7 @@ export function ttydSessionBackend(): 'tmux' | 'screen' {
     } catch {
         // ignore
     }
-    try {
-        const args = new URLSearchParams(window.location.search).getAll('arg');
-        let i = 0;
-        while (i < args.length) {
-            const a = args[i];
-            if (
-                a.startsWith('cwd:') ||
-                a.startsWith('name:') ||
-                a === 'codex' ||
-                a.startsWith('codex:') ||
-                a === 'claude' ||
-                a.startsWith('claude:')
-            ) {
-                i++;
-            } else {
-                break;
-            }
-        }
-        return args[i] === 'screen' ? 'screen' : 'tmux';
-    } catch {
-        return 'tmux';
-    }
+    return parseRoute(window.location.search).backend;
 }
 
 function sessionKey(prefix: string): string {

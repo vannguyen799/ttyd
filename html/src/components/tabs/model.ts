@@ -74,17 +74,35 @@ function sanitizeName(raw: string): string {
     return (raw || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
 }
 
-// Derive the tmux session name a given WS query string routes to. Mirrors the
-// precedence in ttyd-session.sh and vkbd/storage.ts ttydSessionName().
-export function sessionFromSearch(search: string): string {
+export interface Route {
+    session: string;
+    backend: 'tmux' | 'screen';
+}
+
+// Resolve a WS query string to the tmux/screen session it routes to — byte-for-
+// byte the way deploy/scripts/ttyd-session.sh parses it. The two MUST agree, or
+// the chip label, the per-session vkbd storage and the session actually attached
+// drift apart (you type into one session while the UI shows another).
+//
+// Key subtlety the old `args.find('name:')` got wrong: the wrapper treats
+// name:/cwd:/codex[:]/claude[:] as *leading* modifiers only. It walks them
+// left-to-right until the first non-modifier token (the session spec), and a
+// later leading `name:` overwrites an earlier one. A `name:` sitting AFTER the
+// session spec is not a modifier there, so it must not win — matching the shell's
+// positional handling exactly.
+export function parseRoute(search: string): Route {
     try {
         const args = new URLSearchParams(search).getAll('arg');
-        const named = args.find(a => a.startsWith('name:'));
-        if (named !== undefined) return sanitizeName(named.slice('name:'.length)) || 'main';
         let i = 0;
+        let name = '';
+        let explicit = false;
         while (i < args.length) {
             const a = args[i];
-            if (
+            if (a.startsWith('name:')) {
+                name = a.slice('name:'.length); // last leading name: wins, as in the shell
+                explicit = true;
+                i++;
+            } else if (
                 a.startsWith('cwd:') ||
                 a === 'codex' ||
                 a.startsWith('codex:') ||
@@ -96,13 +114,28 @@ export function sessionFromSearch(search: string): string {
                 break;
             }
         }
-        const rest = args.slice(i);
-        if (rest.length === 0) return 'main';
-        if (rest[0] === 'screen' || rest[0] === 'tmux') return sanitizeName(rest[1] ?? '') || 'main';
-        return sanitizeName(rest[0]) || 'main';
+        const spec = args[i];
+        let backend: 'tmux' | 'screen' = 'tmux';
+        if (spec === undefined) {
+            // No session spec: keep whatever name: gave us (or fall through to main).
+        } else if (spec === 'screen') {
+            backend = 'screen';
+            if (!explicit) name = args[i + 1] ?? '';
+        } else if (spec === 'tmux') {
+            if (!explicit) name = args[i + 1] ?? '';
+        } else if (!explicit) {
+            name = spec;
+        }
+        return { session: sanitizeName(name) || 'main', backend };
     } catch {
-        return 'main';
+        return { session: 'main', backend: 'tmux' };
     }
+}
+
+// Derive the tmux session name a given WS query string routes to. Mirrors the
+// precedence in ttyd-session.sh and vkbd/storage.ts ttydSessionName().
+export function sessionFromSearch(search: string): string {
+    return parseRoute(search).session;
 }
 
 // The working directory a WS query string routes to (`cwd:<path>`), or '' when
@@ -135,28 +168,7 @@ export function spawnSearch(source: string | undefined, session: string): string
 }
 
 export function backendFromSearch(search: string): 'tmux' | 'screen' {
-    try {
-        const args = new URLSearchParams(search).getAll('arg');
-        let i = 0;
-        while (i < args.length) {
-            const a = args[i];
-            if (
-                a.startsWith('cwd:') ||
-                a.startsWith('name:') ||
-                a === 'codex' ||
-                a.startsWith('codex:') ||
-                a === 'claude' ||
-                a.startsWith('claude:')
-            ) {
-                i++;
-            } else {
-                break;
-            }
-        }
-        return args[i] === 'screen' ? 'screen' : 'tmux';
-    } catch {
-        return 'tmux';
-    }
+    return parseRoute(search).backend;
 }
 
 let idCounter = 0;
