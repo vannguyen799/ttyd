@@ -10,11 +10,11 @@ import {
     BarMode,
     TabInfo,
     TabsState,
+    allocSession,
     backendFromSearch,
     clampOpacity,
     loadTabsState,
     makeTab,
-    nextSessionName,
     normalizeTabsState,
     saveTabsState,
     spawnSearch,
@@ -110,7 +110,7 @@ export class App extends Component<Record<string, never>, AppState> {
     constructor() {
         super();
         const base = loadTabsState();
-        this.published = JSON.stringify({ tabs: base.tabs, activeId: base.activeId, bar: base.bar });
+        this.published = JSON.stringify({ tabs: base.tabs, activeId: base.activeId, bar: base.bar, seq: base.seq });
         // Only the active tab starts live; the rest wake lazily when visited.
         this.state = { ...base, live: [base.activeId] };
         // Publish before the first render so the vkbd's initial paint already
@@ -151,9 +151,24 @@ export class App extends Component<Record<string, never>, AppState> {
         // browser, so it still has to be reconciled with this page's URL (a
         // deep-linked ?arg= session must stay open and focused).
         const adopted = normalizeTabsState(remote.state);
+        // One-time migration: a browser that used the app before server sync
+        // existed has localRev 0 but may hold tabs whose tmux sessions are still
+        // running and which the remote list has never heard of. Fold those onto
+        // the adopted list rather than dropping the user's live sessions. This is
+        // not a general merge — only when this browser has never synced.
+        if (localRev === 0) {
+            const known = new Set(adopted.tabs.map(t => t.session));
+            const extra = this.state.tabs.filter(t => !known.has(t.session));
+            if (extra.length) adopted.tabs = adopted.tabs.concat(extra);
+        }
         saveRev(remote.rev);
         saveTabsState(adopted);
-        this.published = JSON.stringify({ tabs: adopted.tabs, activeId: adopted.activeId, bar: adopted.bar });
+        this.published = JSON.stringify({
+            tabs: adopted.tabs,
+            activeId: adopted.activeId,
+            bar: adopted.bar,
+            seq: adopted.seq,
+        });
         this.applyActiveGlobals(adopted);
         this.syncUrlTab(adopted.activeId);
         for (const id of this.sleepTimers.keys()) this.cancelSleep(id);
@@ -168,7 +183,7 @@ export class App extends Component<Record<string, never>, AppState> {
     // stamping a fresh revision for those would let a browser sitting untouched
     // in the background outrank a device someone is actually using.
     private publish(s: TabsState, rev: number, force = false) {
-        const durable = { tabs: s.tabs, activeId: s.activeId, bar: s.bar };
+        const durable = { tabs: s.tabs, activeId: s.activeId, bar: s.bar, seq: s.seq };
         const json = JSON.stringify(durable);
         if (!force && json === this.published) return;
         this.published = json;
@@ -260,12 +275,13 @@ export class App extends Component<Record<string, never>, AppState> {
         // that project rather than in ttyd's launch cwd.
         const active = this.activeTab(this.state);
         const group = active?.group;
-        const session = nextSessionName(this.state.tabs, group || active?.session);
+        const { session, seq } = allocSession(this.state, group || active?.session);
         const tab = makeTab(session, spawnSearch(active?.search, session), session, group);
         this.scheduleSleep(prev);
         this.commit({
             ...this.state,
             tabs: [...this.state.tabs, tab],
+            seq,
             activeId: tab.id,
             live: [...this.state.live, tab.id],
         });

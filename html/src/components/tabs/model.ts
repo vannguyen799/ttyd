@@ -66,12 +66,20 @@ export interface TabsState {
     tabs: TabInfo[];
     activeId: string;
     bar: BarState;
+    // Monotonic per-namespace session counter (base name → highest suffix ever
+    // handed out). Persisted and synced so "+" never recycles a name whose tmux
+    // session is still alive on the host — see allocSession().
+    seq?: Record<string, number>;
 }
 
 const STORE_KEY = 'ttyd.tabs.v1';
 
 function sanitizeName(raw: string): string {
     return (raw || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
+}
+
+function escapeRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 }
 
 export interface Route {
@@ -192,17 +200,32 @@ export function genTabId(): string {
     return `t_${t}_${r}_${idCounter}`;
 }
 
-// Pick a fresh session name not already used by an open tab, derived from the
-// namespace's own default session name: main-2, main-3, … for a "main" entry,
-// work-2, work-3, … for a "work" one. The base itself is the first tab, so the
-// numbering starts at 2 and reads naturally. Falls back to "main" when no base
-// is known (e.g. a legacy tab list with no group).
-export function nextSessionName(tabs: TabInfo[], base?: string): string {
+// Allocate a brand-new tmux session name for a "+" tab in the `base` namespace
+// (base-2, base-3, …). The counter is MONOTONIC and persisted in `seq`: closing
+// a tab does not kill its tmux session (the host keeps it running for
+// tmux-continuum resurrection), so a "lowest free number" scheme would eventually
+// hand a new tab a name whose session is still alive — silently reattaching to a
+// session the user thought they had closed. Advancing past every number ever
+// handed out (and past any currently-open one) guarantees "+" always lands on a
+// genuinely new session. `seq` rides in the synced TabsState so two devices
+// pointed at the same host never mint the same name either. Returns the updated
+// `seq` for the caller to fold back into state.
+export function allocSession(state: TabsState, base?: string): { session: string; seq: Record<string, number> } {
     const root = sanitizeName(base || '') || 'main';
-    const used = new Set(tabs.map(t => t.session));
-    let n = 2;
-    while (used.has(`${root}-${n}`)) n++;
-    return `${root}-${n}`;
+    const used = new Set(state.tabs.map(t => t.session));
+    const seq: Record<string, number> = { ...(state.seq || {}) };
+    let n = Number.isFinite(seq[root]) ? seq[root] : 1;
+    // Never regress below a number that's currently open (e.g. a legacy list or a
+    // list adopted from another device that carried no seq for this base).
+    const re = new RegExp(`^${escapeRegExp(root)}-(\\d+)$`);
+    for (const t of state.tabs) {
+        const m = re.exec(t.session);
+        if (m) n = Math.max(n, Number(m[1]));
+    }
+    n += 1;
+    while (used.has(`${root}-${n}`)) n += 1;
+    seq[root] = n;
+    return { session: `${root}-${n}`, seq };
 }
 
 export function makeTab(session: string, search: string, title?: string, group?: string): TabInfo {
@@ -270,7 +293,7 @@ export function loadTabsState(): TabsState {
 export function normalizeTabsState(saved: TabsState | null): TabsState {
     if (!saved || !Array.isArray(saved.tabs) || saved.tabs.length === 0) {
         const first = initialTabFromUrl();
-        return { tabs: [first], activeId: first.id, bar: defaultBar() };
+        return { tabs: [first], activeId: first.id, bar: defaultBar(), seq: {} };
     }
 
     // Restore, but make sure the session the page was *opened* with is present
@@ -312,7 +335,11 @@ export function normalizeTabsState(saved: TabsState | null): TabsState {
         if (hashId && tabs.some(t => t.id === hashId)) activeId = hashId;
     }
 
-    return { tabs, activeId, bar };
+    // Carry the monotonic session counter forward so "+" keeps minting fresh
+    // names across reloads and across an adopted (cross-device) list.
+    const seq: Record<string, number> = saved.seq && typeof saved.seq === 'object' ? { ...saved.seq } : {};
+
+    return { tabs, activeId, bar, seq };
 }
 
 export function saveTabsState(state: TabsState): void {
