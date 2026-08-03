@@ -173,11 +173,23 @@ export function backendFromSearch(search: string): 'tmux' | 'screen' {
 
 let idCounter = 0;
 export function genTabId(): string {
-    // Time-free unique id (Date.now/Math.random are fine in the browser, but a
-    // counter keyed off performance.now avoids any collision within a session).
+    // Tab ids MUST be globally unique, not just unique within one page load: they
+    // are shared across devices through the /tabs sync blob and embedded in the
+    // URL hash (#tab=<id>), so two browsers minting the same id would make a
+    // reload focus the wrong session. crypto.randomUUID is the strong path; it is
+    // absent outside a secure context (this UI is routinely served over plain
+    // HTTP on a LAN), so fall back to time + randomness + a per-load counter,
+    // which is still cross-device-unique unlike the old performance.now counter.
+    try {
+        const c = (typeof crypto !== 'undefined' ? crypto : undefined) as { randomUUID?: () => string } | undefined;
+        if (c?.randomUUID) return `t_${c.randomUUID()}`;
+    } catch {
+        // ignore — fall through to the manual id
+    }
     idCounter += 1;
-    const t = typeof performance !== 'undefined' ? Math.floor(performance.now()) : idCounter;
-    return `t${t}_${idCounter}`;
+    const t = Date.now().toString(36);
+    const r = Math.floor(Math.random() * 0xffffffff).toString(36);
+    return `t_${t}_${r}_${idCounter}`;
 }
 
 // Pick a fresh session name not already used by an open tab, derived from the
