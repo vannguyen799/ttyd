@@ -192,6 +192,38 @@ echo ""
 #
 # Rebuild only when the binary is missing or older than a source file, so a
 # normal restart stays instant.
+#
+# A failed rebuild must never take the terminal down. On an IDX workspace the
+# bare cmake call cannot succeed at all — IDX materializes .idx/dev.nix packages
+# in /usr/bin as their *default* output only, so gcc and cmake are on PATH while
+# zlib.h and libwebsockets.pc are not. Two fallbacks cover that:
+#   1. retry the build inside nix-shell, which does expose the -dev outputs;
+#   2. if that is unavailable or also fails, run the binary already in build/.
+# Stale code is a far smaller failure than no web terminal — on 2026-08-03 this
+# exact rebuild failed and left ttyd dead for 45 minutes with the watchdog
+# looping restart→fail, because a start script cannot fix a broken toolchain.
+
+# Packages the fork needs to compile; kept next to the nix-shell call that is
+# the only consumer, so adding a dependency to CMakeLists means editing one list.
+NIX_BUILD_DEPS="libwebsockets json_c libuv zlib openssl pkg-config cmake gcc gnumake"
+
+# Both build attempts append to the same log so a failure report is complete.
+bare_build() {
+    cmake -S "$FORK_ROOT" -B "$FORK_ROOT/build" -DCMAKE_BUILD_TYPE=Release >/tmp/ttyd-build.log 2>&1 \
+        && cmake --build "$FORK_ROOT/build" -j "$(nproc)" >>/tmp/ttyd-build.log 2>&1
+}
+
+# A failed configure leaves a CMakeCache.txt pinning the toolchain it rejected,
+# and cmake refuses to reconfigure the same build dir with a different compiler.
+# Clearing it is what makes the nix-shell retry meaningful rather than a replay.
+nix_shell_build() {
+    rm -rf "$FORK_ROOT/build/CMakeCache.txt" "$FORK_ROOT/build/CMakeFiles"
+    nix-shell -p $NIX_BUILD_DEPS --run "
+        cmake -S '$FORK_ROOT' -B '$FORK_ROOT/build' -DCMAKE_BUILD_TYPE=Release &&
+        cmake --build '$FORK_ROOT/build' -j \"\$(nproc)\"
+    " >>/tmp/ttyd-build.log 2>&1
+}
+
 resolve_ttyd_bin() {
     if [ -n "${TTYD_BIN:-}" ]; then
         [ -x "$TTYD_BIN" ] || { echo -e "${RED}Error: TTYD_BIN=$TTYD_BIN is not executable${NC}"; return 1; }
@@ -217,12 +249,29 @@ resolve_ttyd_bin() {
     fi
 
     echo -e "${YELLOW}Building ttyd from $FORK_ROOT (sources changed or no binary yet)...${NC}"
-    if ! cmake -S "$FORK_ROOT" -B "$FORK_ROOT/build" -DCMAKE_BUILD_TYPE=Release >/tmp/ttyd-build.log 2>&1 \
-        || ! cmake --build "$FORK_ROOT/build" -j "$(nproc)" >>/tmp/ttyd-build.log 2>&1; then
-        echo -e "${RED}Error: build failed. See /tmp/ttyd-build.log${NC}"
-        return 1
+    if bare_build; then
+        echo -e "${GREEN}✓ built $TTYD_BIN${NC}"
+        return 0
     fi
-    echo -e "${GREEN}✓ built $TTYD_BIN${NC}"
+
+    if command -v nix-shell >/dev/null 2>&1; then
+        echo -e "${YELLOW}Build failed — retrying inside nix-shell (dev outputs)...${NC}"
+        if nix_shell_build; then
+            echo -e "${GREEN}✓ built $TTYD_BIN via nix-shell${NC}"
+            return 0
+        fi
+    fi
+
+    # Every build path failed. Serving the previous binary keeps the terminal
+    # reachable, which is also the only way in to fix the build.
+    if [ -x "$TTYD_BIN" ]; then
+        echo -e "${RED}Error: build failed. See /tmp/ttyd-build.log${NC}"
+        echo -e "${YELLOW}⚠ running the existing binary instead — it predates the current sources.${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}Error: build failed and no previous binary exists. See /tmp/ttyd-build.log${NC}"
+    return 1
 }
 
 # Repair a stale libwebsockets RUNPATH.
