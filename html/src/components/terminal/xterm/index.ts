@@ -643,8 +643,12 @@ export class Xterm {
     }
 
     private imagePasteTarget(): 'claude' | 'path' {
-        // The wrapper args are the strongest signal and survive reconnects.
-        // Honour the last agent modifier because ttyd-session.sh does too.
+        // Prefer the live process title. A saved tab can say `claude` while
+        // its existing tmux session is now running Codex (or vice versa), so
+        // the URL is only a startup fallback before the first OSC title.
+        if (this.processTitle) {
+            return /(?:^| - )CLAUDE$/i.test(this.processTitle) ? 'claude' : 'path';
+        }
         try {
             let agent = '';
             for (const arg of new URL(this.options.wsUrl).searchParams.getAll('arg')) {
@@ -653,15 +657,17 @@ export class Xterm {
             }
             if (agent) return agent === 'claude' ? 'claude' : 'path';
         } catch {
-            // Fall through to the OSC title supplied by the session wrapper.
+            // A plain path is understood by Codex and remains useful text in
+            // any other foreground program.
         }
-        return /(?:^| - )CLAUDE$/i.test(this.processTitle) ? 'claude' : 'path';
+        return 'path';
     }
 
     // Paste an image into whichever supported agent is in the foreground. The
-    // server stores it as a private temporary PNG. Codex recognizes the path as
-    // a bracketed paste. Claude receives Ctrl+V and reads the same PNG through
-    // ttyd-pro's X11-free xclip compatibility helper.
+    // server stores it as a private temporary PNG. Codex recognizes an
+    // explicitly pasted image path as an attachment; Claude's documented
+    // @file syntax adds the same file to its context. Both travel as ordinary
+    // terminal input, so this path never needs a host clipboard or X11.
     @bind
     public async pasteImage(src: Blob) {
         const { overlayAddon } = this;
@@ -683,8 +689,8 @@ export class Xterm {
                 throw new Error(detail.error || `HTTP ${resp.status}`);
             }
             if (!detail.path) throw new Error('upload returned no image path');
-            if (this.imagePasteTarget() === 'claude') this.sendData('\x16');
-            else this.sendData(`\x1b[200~${detail.path}\x1b[201~`);
+            const reference = this.imagePasteTarget() === 'claude' ? `@${detail.path}` : detail.path;
+            this.sendData(`\x1b[200~${reference}\x1b[201~`);
             overlayAddon?.showOverlay('🖼 pasted', 600);
         } catch (e) {
             console.warn('[ttyd] image paste failed', e);

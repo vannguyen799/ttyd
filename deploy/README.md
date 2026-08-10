@@ -334,37 +334,42 @@ server.
 The browser re-encodes the image as PNG and sends it to the authenticated
 `/image-upload` endpoint. ttyd writes it on libuv's worker pool to a private,
 randomly named file in the operating system's temporary directory and returns
-the absolute path. What the UI sends next depends on the agent modifier in the
-terminal URL:
+the absolute path. The UI sends that file reference as ordinary bracketed-paste
+terminal input, choosing the format from the live foreground-process title
+(with the tab URL used only before the first title arrives):
 
 - **Codex** receives the returned path as a bracketed paste. Codex validates
   explicitly pasted image paths and converts them into native attachments.
-- **Claude Code** receives Ctrl+V after the upload completes. On Linux Claude
-  asks `xclip` for `image/png`; `ttyd-session.sh` puts the repo-local,
-  read-only `deploy/libexec/xclip` first on the Claude process's PATH. That
-  helper reads the latest uploaded PNG directly, without talking to X11 or
-  replacing the system `xclip`.
+- **Claude Code** receives `@<absolute-path>` as a bracketed paste. `@file` is
+  Claude Code's documented file-reference syntax, so the PNG enters context
+  without invoking its clipboard action.
 
 ```
 Browser paste/drop ──POST /image-upload──▶ ttyd ──▶ /tmp/ttyd-image-paste-XXXXXX
                                                     │
                          ┌──────────────────────────┴──────────────────────┐
                          │                                                 │
-              Codex: bracketed path                         Claude: Ctrl+V + local
-                         │                                  image/png reader (no X11)
+              Codex: bracketed path                         Claude: bracketed @path
+                         │                                                 │
                          └──────────────────────────┬──────────────────────┘
                                                     ▼
-                                               [Image #1]
+                                             image context
 ```
 
-The physical Ctrl+V key is suppressed while the browser paste event runs, so
-the foreground agent cannot race ahead of the asynchronous upload.
+The physical Ctrl+V key is suppressed while the browser paste event runs; only
+the returned durable file reference is inserted after the upload completes.
+There is no X11, DISPLAY, desktop clipboard, or agent-session environment
+requirement in the primary path.
 
-Use `?arg=codex&arg=<session>` or `?arg=claude&arg=<session>` so the UI selects
-the native integration deterministically. After upgrading, recreate an
-already-running Claude tmux session once through the `claude` route so the new
-process inherits the helper at the front of `PATH`; Codex panes do not need
-that helper.
+Use `?arg=codex&arg=<session>` or `?arg=claude&arg=<session>` when creating a
+new session. Existing sessions may switch agents: tmux publishes the actual
+foreground command in its title, and that live value takes priority over the
+saved URL when formatting an image reference.
+
+For a smooth rolling upgrade, the deployment still includes a tiny X11-free
+`xclip` reader and publishes a per-user pointer for browser pages that loaded
+the older Ctrl+V-based JavaScript. Refreshing the page moves it to the direct
+file-reference path; new sessions and new clients do not depend on the helper.
 
 **How to use it**
 
@@ -381,8 +386,8 @@ terminal — ttyd's `/token` hands the browser `base64("user:pass")` and the
 client replays it in an `Authorization: Basic` header. Bodies over 12 MB are
 rejected and non-PNG bodies are refused. Temporary files use the platform's
 secure temp-file primitive and stale ttyd image uploads are removed after 24
-hours when the next image is stored. The Claude compatibility pointer is
-per-user, atomically replaced, and readable only by that user.
+hours when the next image is stored. The legacy-client compatibility pointer
+is per-user, atomically replaced, and readable only by that user.
 
 ---
 
@@ -655,7 +660,7 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     │   ├── resurrect-agent-hook.sh # Restore claude/codex panes into their own conversation
     │   └── ttyd-session.sh   # URL-arg routing → tmux / screen
     ├── libexec/
-    │   └── xclip             # Read-only image/png helper for Claude; no X11
+    │   └── xclip             # X11-free fallback for browser pages with the old UI loaded
     └── README.md             # This file
 ```
 

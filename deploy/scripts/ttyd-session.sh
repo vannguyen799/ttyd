@@ -62,10 +62,9 @@ if [ -n "${HOME:-}" ]; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# Claude Code implements image paste on Linux by reading image/png through
-# xclip. The Claude launch below puts ttyd-pro's read-only, X11-free helper at
-# the front of that process's PATH only; it does not modify the shell or the
-# user's system xclip installation.
+# Backward compatibility for browser tabs that still have the pre-upgrade UI
+# loaded: those clients send Claude's Ctrl+V action after upload. New clients
+# use Claude's @file syntax and never invoke this helper.
 LIBEXEC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../libexec" && pwd)"
 
 SHELL_CMD="${SHELL:-/bin/bash}"
@@ -182,11 +181,10 @@ NAME="$(sanitize "$NAME")"
 
 # Title shown in browser tab (document.title) + tmux set-titles-string.
 TITLE="$NAME"
-TMUX_TITLES_STRING='#S'
+TMUX_TITLES_STRING='#{?#{==:#{pane_current_command},claude},#S - CLAUDE,#{?#{==:#{pane_current_command},codex},#S - CODEX,#S}}'
 if [ "$AGENT_ENABLED" = 1 ]; then
     AGENT_LABEL="$(printf '%s' "$AGENT_CMD" | tr '[:lower:]' '[:upper:]')"
     TITLE="$NAME - $AGENT_LABEL"
-    TMUX_TITLES_STRING="#S - $AGENT_LABEL"
 fi
 
 # Emit OSC-0 so xterm.js (ttyd frontend) picks up browser-tab title.
@@ -222,6 +220,18 @@ TGT="=$NAME"
 
 # Existing session → always just attach (don't re-run the agent CLI).
 if tmux has-session -t "$TGT" 2>/dev/null; then
+    # The saved browser route describes how the session was first created, not
+    # necessarily what its pane runs today. Reflect the actual foreground
+    # agent in OSC/title updates so image delivery cannot confuse Codex with
+    # Claude after a user switches tools inside an existing session.
+    CURRENT_COMMAND="$(tmux list-panes -t "$TGT" -F '#{pane_current_command}' 2>/dev/null | head -n 1)"
+    case "$CURRENT_COMMAND" in
+        claude|codex)
+            CURRENT_LABEL="$(printf '%s' "$CURRENT_COMMAND" | tr '[:lower:]' '[:upper:]')"
+            TITLE="$NAME - $CURRENT_LABEL"
+            ;;
+        *) TITLE="$NAME" ;;
+    esac
     tmux set-option -t "$TGT" -g set-titles on 2>/dev/null
     tmux set-option -t "$TGT" -g set-titles-string "$TMUX_TITLES_STRING" 2>/dev/null
     set_browser_title "$TITLE"

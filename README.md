@@ -13,8 +13,8 @@ deploy kit:
   and per-tab sleep/wake with auto-reconnect on mobile.
 - 📋 **Copy & paste that actually works on mobile** — OSC 52 → `execCommand` → tap-to-copy sheet
   fallback for plain-HTTP origins, touch select-mode, and a floating copy tooltip.
-- 🖼 **Image paste into Claude Code and Codex** — paste or drag a screenshot and it arrives as a
-  real `[Image #1]` attachment through a temporary-file bridge; no desktop or X server required.
+- 🖼 **Image paste into Claude Code and Codex** — paste or drag a screenshot and it is uploaded to
+  a private temporary file, then referenced directly in the agent; no desktop, clipboard, or X server required.
 - 🔀 **URL-based session routing** — `?arg=work`, `?arg=claude&arg=dev`, `cwd:` modifiers, etc.,
   auto-attach to named `tmux`/`screen` sessions.
 - 💾 **Sessions that survive a reboot** — tmux window/pane layout is saved and restored, the tab

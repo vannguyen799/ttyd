@@ -511,8 +511,8 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       }
 
       // Image paste bridge. The browser stores the image on the ttyd host.
-      // Codex consumes the returned path directly; Claude reads the published
-      // PNG through the deployment's X11-free xclip compatibility helper.
+      // The UI then pastes the returned path into the foreground agent using
+      // its documented local-file syntax; no host clipboard is involved.
       if (strcmp(pss->path, endpoints.image) == 0) {
         if (lws_hdr_total_length(wsi, WSI_TOKEN_POST_URI) == 0) {
           lws_return_http_status(wsi, HTTP_STATUS_METHOD_NOT_ALLOWED, NULL);

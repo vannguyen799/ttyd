@@ -1,5 +1,5 @@
 #!/bin/bash
-# Read-only, X11-free subset of xclip used by Claude Code for image paste.
+# Read-only, X11-free subset of xclip kept for pre-upgrade browser tabs.
 
 set -u
 

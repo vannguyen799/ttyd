@@ -54,10 +54,9 @@ static int write_all(int file, const char *data, size_t len) {
   return 0;
 }
 
-// Claude Code's Linux image-paste path asks xclip for image/png bytes. The
-// deployment includes a tiny, X11-free xclip-compatible reader that follows
-// this per-user pointer. Publish it atomically so a concurrent read sees the
-// previous complete upload or the new complete upload, never a partial path.
+// Keep the compatibility pointer for browser tabs that still have the old UI
+// loaded. New clients use the returned path directly; stale clients can keep
+// using the X11-free xclip helper until their next page refresh.
 static int publish_current_upload(const char *temp_dir, const char *image_path, char *error, size_t error_len) {
   uv_passwd_t passwd;
   int status = uv_os_get_passwd(&passwd);
