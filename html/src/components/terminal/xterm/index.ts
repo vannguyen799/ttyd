@@ -137,7 +137,7 @@ export interface FlowControl {
 export interface XtermOptions {
     wsUrl: string;
     tokenUrl: string;
-    clipboardUrl: string;
+    imageUploadUrl: string;
     flowControl: FlowControl;
     clientOptions: ClientOptions;
     termOptions: ITerminalOptions;
@@ -196,6 +196,7 @@ export class Xterm {
     // the virtual keyboard talks to.
     private bridge?: TtydBridge;
     private title?: string;
+    private processTitle = '';
     private titleFixed?: string;
     private resizeOverlay = true;
     private reconnect = true;
@@ -641,21 +642,33 @@ export class Xterm {
         this.zmodemAddon?.sendFile(files);
     }
 
-    // Paste an image into whatever TUI is in the foreground.
-    //
-    // Rather than writing the image to disk and typing its path, this loads it
-    // into the host's X clipboard and then sends a real Ctrl+V, so Claude Code
-    // runs its own paste path and renders a native [Image #N] chip. It reads
-    // the clipboard with `xclip -selection clipboard -t image/png -o`, which
-    // is exactly what /clipboard-image arms. The path-typing alternative only
-    // works for tools that happen to read file paths, and loses the chip.
+    private imagePasteTarget(): 'claude' | 'path' {
+        // The wrapper args are the strongest signal and survive reconnects.
+        // Honour the last agent modifier because ttyd-session.sh does too.
+        try {
+            let agent = '';
+            for (const arg of new URL(this.options.wsUrl).searchParams.getAll('arg')) {
+                if (arg === 'claude' || arg.startsWith('claude:')) agent = 'claude';
+                if (arg === 'codex' || arg.startsWith('codex:')) agent = 'codex';
+            }
+            if (agent) return agent === 'claude' ? 'claude' : 'path';
+        } catch {
+            // Fall through to the OSC title supplied by the session wrapper.
+        }
+        return /(?:^| - )CLAUDE$/i.test(this.processTitle) ? 'claude' : 'path';
+    }
+
+    // Paste an image into whichever supported agent is in the foreground. The
+    // server stores it as a private temporary PNG. Codex recognizes the path as
+    // a bracketed paste. Claude receives Ctrl+V and reads the same PNG through
+    // ttyd-pro's X11-free xclip compatibility helper.
     @bind
     public async pasteImage(src: Blob) {
         const { overlayAddon } = this;
         try {
             overlayAddon?.showOverlay('🖼 …', 2000);
             const png = await toPngBlob(src);
-            const resp = await fetch(this.options.clipboardUrl, {
+            const resp = await fetch(this.options.imageUploadUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'image/png',
@@ -665,11 +678,13 @@ export class Xterm {
                 },
                 body: png,
             });
+            const detail = (await resp.json().catch(() => ({}))) as { error?: string; path?: string };
             if (!resp.ok) {
-                const detail = await resp.json().catch(() => ({}));
                 throw new Error(detail.error || `HTTP ${resp.status}`);
             }
-            this.sendData('\x16'); // Ctrl+V
+            if (!detail.path) throw new Error('upload returned no image path');
+            if (this.imagePasteTarget() === 'claude') this.sendData('\x16');
+            else this.sendData(`\x1b[200~${detail.path}\x1b[201~`);
             overlayAddon?.showOverlay('🖼 pasted', 600);
         } catch (e) {
             console.warn('[ttyd] image paste failed', e);
@@ -816,6 +831,14 @@ export class Xterm {
 
         terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
             if (event.type !== 'keydown') return true;
+
+            // Let the browser generate its paste event, but do not also send a
+            // raw Ctrl+V to the PTY before the async image upload has finished.
+            // Text paste is still handled by xterm's paste listener; image
+            // paste is handled by onPaste below.
+            const isPasteShortcut =
+                !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'v' && (event.ctrlKey || event.metaKey);
+            if (isPasteShortcut) return false;
 
             // Mac Cmd+C or cross-platform Ctrl+Shift+C: copy selection.
             // Called directly in a keydown handler so navigator.clipboard is
@@ -1085,6 +1108,7 @@ export class Xterm {
         register(
             terminal.onTitleChange(data => {
                 if (data && data !== '') {
+                    this.processTitle = data;
                     // The OSC-0 title (session/agent name from the wrapper) is
                     // the best tab label — bubble it regardless of which tab is
                     // active. Only the active tab owns the document title.

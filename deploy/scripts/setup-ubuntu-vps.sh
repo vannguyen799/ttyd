@@ -77,7 +77,7 @@ $SUDO apt-get update -qq
 $SUDO apt-get install -y -qq \
   build-essential cmake git pkg-config \
   libjson-c-dev libwebsockets-dev zlib1g-dev libssl-dev libuv1-dev \
-  tmux screen ca-certificates curl xclip xvfb >/dev/null
+  tmux screen ca-certificates curl >/dev/null
 ok "dependencies installed"
 
 # ── 2. fetch the ttyd fork (carries the vkbd source in src/html.h) ─────

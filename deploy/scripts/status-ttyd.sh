@@ -38,13 +38,12 @@ else
     echo -e "  ttyd:        ${RED}Stopped${NC}"
 fi
 
-# Clipboard bridge — what makes browser image paste (Ctrl+V) work.
-CLIP_DISPLAY="${TTYD_CLIP_DISPLAY:-:77}"
-PIDFILE_CLIP="/tmp/ttyd-clipboard-x.pid"
-if [ -f "$PIDFILE_CLIP" ] && kill -0 "$(cat "$PIDFILE_CLIP")" 2>/dev/null; then
-    echo -e "  Image paste: ${GREEN}Running${NC} (headless X on $CLIP_DISPLAY)"
+# Image paste is handled by ttyd's authenticated upload endpoint; it needs no
+# sidecar process and is available whenever this fork's ttyd is running.
+if pgrep -f "ttyd -p" > /dev/null; then
+    echo -e "  Image paste: ${GREEN}Running${NC} (temporary-file bridge)"
 else
-    echo -e "  Image paste: ${RED}Stopped${NC} (needs xclip + Xvfb)"
+    echo -e "  Image paste: ${RED}Stopped${NC}"
 fi
 
 # Dev server — not part of the deployment, but worth flagging when it is up.

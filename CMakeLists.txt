@@ -33,7 +33,7 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/clipboard.c src/server.c)
+set(SOURCE_FILES src/utils.c src/pty.c src/protocol.c src/http.c src/image_upload.c src/server.c)
 
 include(FindPackageHandleStandardArgs)
 

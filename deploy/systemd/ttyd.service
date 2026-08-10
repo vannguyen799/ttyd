@@ -6,7 +6,7 @@
 # the installer to regenerate it.
 #
 # One process serves everything: the vkbd UI baked into src/html.h, the
-# terminal WebSocket, /clipboard-image and the /tabs layout store. There is no
+# terminal WebSocket, /image-upload and the /tabs layout store. There is no
 # webpack proxy and no Node runtime in the deployment.
 
 [Unit]
@@ -26,9 +26,9 @@ EnvironmentFile=-@ENV_FILE@
 ExecStart=@FORK_ROOT@/deploy/scripts/start-ttyd.sh --foreground
 
 # The whole point of this deployment is that terminal sessions outlive the
-# server: the script starts a tmux server and the headless X clipboard, and
-# both land in this unit's cgroup. Under the default KillMode=control-group,
-# `systemctl restart ttyd` would take every tmux session down with it — losing
+# server: the script starts a tmux server in the same unit cgroup. Under the
+# default KillMode=control-group, `systemctl restart ttyd` would take every
+# tmux session down with it — losing
 # exactly the work the browser reconnects to. KillMode=process signals only
 # ttyd itself and leaves the rest of the cgroup running.
 KillMode=process

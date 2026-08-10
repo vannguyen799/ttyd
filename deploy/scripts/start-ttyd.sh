@@ -186,7 +186,7 @@ echo ""
 # Resolve the ttyd binary to run.
 #
 # It must be THIS fork's build, not a distro/nix ttyd: the vkbd UI, the tab
-# bar and the /clipboard-image endpoint all live in the binary now. Stock ttyd
+# bar and the /image-upload endpoint all live in the binary now. Stock ttyd
 # would come up serving its own default UI and image paste would 404, which is
 # a confusing way to fail — so build from the checkout rather than fall back.
 #
@@ -311,9 +311,6 @@ resolve_ttyd_bin || exit 1
 repair_lws_runpath
 ensure_package "tmux" "tmux" || echo -e "${YELLOW}Warning: tmux missing, default sessions will fall back to shell${NC}"
 command -v screen >/dev/null 2>&1 || echo -e "${YELLOW}Warning: screen not installed, /screen/<name> routes will fall back to shell${NC}"
-# Clipboard bridge deps — optional: only browser image paste depends on them.
-ensure_package "xclip" "xclip" || echo -e "${YELLOW}Warning: xclip missing, browser image paste disabled${NC}"
-ensure_package "Xvfb" "xorg.xorgserver" || echo -e "${YELLOW}Warning: Xvfb missing, browser image paste disabled${NC}"
 
 # Kill existing processes
 if [ -f "$PIDFILE_TTYD" ]; then
@@ -396,30 +393,6 @@ if command -v tmux >/dev/null 2>&1 && [ -f "$PERSIST_CONF" ]; then
     else
         tmux source-file "$USER_TMUX_CONF" 2>/dev/null || true
     fi
-fi
-
-# ── clipboard bridge (image paste from the browser) ────────────
-# A browser tab can't reach the host clipboard, so Ctrl+V never finds an
-# image and Claude Code can't be given screenshots. Fix: run a 1x1 headless
-# X display whose only job is holding a clipboard selection. The web UI
-# POSTs a pasted image to ttyd's /clipboard-image endpoint (src/clipboard.c),
-# which loads it into that clipboard via xclip; Ctrl+V in Claude then works
-# natively. Exporting DISPLAY here is what makes it reach Claude: ttyd
-# inherits it → ttyd-session.sh → tmux → the agent process. TTYD_CLIP_DISPLAY
-# is what ttyd itself reads when spawning xclip.
-CLIP_DISPLAY="${TTYD_CLIP_DISPLAY:-:77}"
-if bash "$SCRIPT_DIR/start-clipboard-x.sh"; then
-    export DISPLAY="$CLIP_DISPLAY"
-    export TTYD_CLIP_DISPLAY="$CLIP_DISPLAY"
-    echo -e "${GREEN}✓ clipboard bridge ready (DISPLAY=$CLIP_DISPLAY)${NC}"
-    # tmux only copies DISPLAY into sessions created *after* this point
-    # (update-environment). Seed the global env so new sessions inherit it;
-    # panes already running keep their old env and need a restart.
-    if command -v tmux >/dev/null 2>&1 && tmux has-session 2>/dev/null; then
-        tmux setenv -g DISPLAY "$CLIP_DISPLAY" 2>/dev/null || true
-    fi
-else
-    echo -e "${YELLOW}⚠ clipboard bridge unavailable — image paste will be disabled${NC}"
 fi
 
 print_banner() {

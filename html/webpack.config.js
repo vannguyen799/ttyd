@@ -103,12 +103,12 @@ const devConfig = {
             },
         },
         // Everything that isn't the bundle goes to the real ttyd, including
-        // /clipboard-image — the image-paste bridge lives in the binary
-        // (src/clipboard.c), so dev mode exercises the same code production
+        // /image-upload — the image-paste bridge lives in the binary
+        // (src/image_upload.c), so dev mode exercises the same code production
         // does instead of a second, drifting implementation.
         proxy: [
             {
-                context: ['/token', '/ws', '/clipboard-image', '/tabs'],
+                context: ['/token', '/ws', '/image-upload', '/tabs'],
                 target: TTYD_ORIGIN,
                 ws: true,
                 // Safari/iOS (WebKit) does not send the Authorization header on

@@ -6,7 +6,7 @@
 # process that serves the UI from src/html.h. Use this while editing html/,
 # then `yarn build` to bake the result back into the binary.
 #
-# Serves http://localhost:$PORT and proxies /ws, /token and /clipboard-image
+# Serves http://localhost:$PORT and proxies /ws, /token and /image-upload
 # to the ttyd instance on $TTYD_PORT (default 10090).
 set -euo pipefail
 

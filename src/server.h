@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <uv.h>
 
-#include "clipboard.h"
+#include "image_upload.h"
 #include "pty.h"
 
 // client message
@@ -23,7 +23,7 @@ struct endpoints {
   char *index;
   char *token;
   char *parent;
-  char *clipboard;
+  char *image;
   char *tabs;
 };
 
@@ -34,7 +34,7 @@ extern struct endpoints endpoints;
 
 // What a POST body being accumulated is destined for. NONE means the request
 // has no body we care about, so anything it sends is dropped on the floor.
-enum post_kind { POST_NONE, POST_CLIPBOARD, POST_TABS };
+enum post_kind { POST_NONE, POST_IMAGE, POST_TABS };
 
 struct pss_http {
   char path[128];
@@ -42,21 +42,21 @@ struct pss_http {
   char *ptr;
   size_t len;
 
-  // POST body accumulator, shared by /clipboard-image and /tabs. The clipboard
-  // answers from a libuv callback once xclip has the image — hence the stored
-  // wsi to wake writes on.
+  // POST body accumulator, shared by /image-upload and /tabs. Image writes run
+  // on libuv's worker pool, hence the stored wsi used to wake the response.
   struct lws *wsi;
   enum post_kind post;
   char *body;
   size_t body_len;
   size_t body_max;
   bool body_too_large;
-  clipboard_req *clip;
-  // A queued JSON answer ({"ok": true} / {"error": "…"}), written out on the
-  // next writable callback.
+  image_upload_req *image_upload;
+  // A queued JSON answer ({"path": "…"} / {"error": "…"}), written out on
+  // the next writable callback.
   bool json_reply;
   int json_status;
   char json_error[128];
+  char json_path[IMAGE_UPLOAD_PATH_MAX];
   // Session token this response has to hand back in a Set-Cookie, empty when
   // there is nothing to send: the request either arrived with a cookie that is
   // still good for a while, or it is not authenticated at all.

@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <zlib.h>
 
-#include "clipboard.h"
 #include "html.h"
 #include "server.h"
 #include "utils.h"
@@ -79,35 +78,27 @@ static void pss_buffer_free(struct pss_http *pss) {
   if (pss->buffer != (char *)index_html && pss->buffer != html_cache) free(pss->buffer);
 }
 
-// Queue the JSON answer to a POST. The message ends up inside a JSON string
-// and part of it comes from elsewhere (xclip, strerror), so strip anything
-// that would break out of the quotes.
-static void json_result(struct pss_http *pss, int status, const char *error) {
-  size_t i = 0;
-  if (error != NULL) {
-    for (; error[i] != '\0' && i < sizeof(pss->json_error) - 1; i++) {
-      char c = error[i];
-      pss->json_error[i] = (c == '"' || c == '\\' || (unsigned char)c < 0x20) ? ' ' : c;
-    }
-  }
-  pss->json_error[i] = '\0';
-
+// Queue the JSON answer to a POST. json-c performs the actual escaping in the
+// writable callback; these fields only retain the values until then.
+static void json_result(struct pss_http *pss, int status, const char *path, const char *error) {
+  snprintf(pss->json_path, sizeof(pss->json_path), "%s", path != NULL ? path : "");
+  snprintf(pss->json_error, sizeof(pss->json_error), "%s", error != NULL ? error : "");
   pss->json_status = status;
   pss->json_reply = true;
   lws_callback_on_writable(pss->wsi);
 }
 
-static void clipboard_done(void *ctx, int status, const char *error) {
+static void image_upload_done(void *ctx, int status, const char *path, const char *error) {
   struct pss_http *pss = (struct pss_http *)ctx;
 
-  pss->clip = NULL;
-  json_result(pss, status == 0 ? HTTP_STATUS_OK : HTTP_STATUS_INTERNAL_SERVER_ERROR, error);
+  pss->image_upload = NULL;
+  json_result(pss, status == 0 ? HTTP_STATUS_OK : HTTP_STATUS_INTERNAL_SERVER_ERROR, path, error);
 }
 
 static void request_reset(struct pss_http *pss) {
-  if (pss->clip != NULL) {
-    clipboard_detach(pss->clip);
-    pss->clip = NULL;
+  if (pss->image_upload != NULL) {
+    image_upload_detach(pss->image_upload);
+    pss->image_upload = NULL;
   }
   free(pss->body);
   pss->body = NULL;
@@ -116,6 +107,8 @@ static void request_reset(struct pss_http *pss) {
   pss->body_too_large = false;
   pss->post = POST_NONE;
   pss->json_reply = false;
+  pss->json_path[0] = '\0';
+  pss->json_error[0] = '\0';
   pss->cookie[0] = '\0';
 }
 
@@ -453,7 +446,7 @@ static int check_auth(struct lws *wsi, struct pss_http *pss) {
 static void tabs_store(struct pss_http *pss) {
   struct json_object *parsed = json_tokener_parse(pss->body);
   if (parsed == NULL) {
-    json_result(pss, HTTP_STATUS_BAD_REQUEST, "not valid json");
+    json_result(pss, HTTP_STATUS_BAD_REQUEST, NULL, "not valid json");
     return;
   }
   json_object_put(parsed);
@@ -461,10 +454,10 @@ static void tabs_store(struct pss_http *pss) {
   int err = write_file_atomic(server->tabs_file, pss->body, pss->body_len);
   if (err != 0) {
     lwsl_err("tabs: cannot write %s: %s\n", server->tabs_file, strerror(err));
-    json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, strerror(err));
+    json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL, strerror(err));
     return;
   }
-  json_result(pss, HTTP_STATUS_OK, NULL);
+  json_result(pss, HTTP_STATUS_OK, NULL, NULL);
 }
 
 static void access_log(struct lws *wsi, const char *path) {
@@ -517,17 +510,17 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         break;
       }
 
-      // Image paste bridge. A browser tab can't reach the host clipboard, so
-      // the UI POSTs the pasted image here; we load it into the clipboard of
-      // the headless X display and the client then sends a real Ctrl+V, which
-      // the foreground TUI handles as a native paste.
-      if (strcmp(pss->path, endpoints.clipboard) == 0) {
+      // Image paste bridge. The browser stores the image on the ttyd host.
+      // Codex consumes the returned path directly; Claude reads the published
+      // PNG through the deployment's X11-free xclip compatibility helper.
+      if (strcmp(pss->path, endpoints.image) == 0) {
         if (lws_hdr_total_length(wsi, WSI_TOKEN_POST_URI) == 0) {
           lws_return_http_status(wsi, HTTP_STATUS_METHOD_NOT_ALLOWED, NULL);
           goto try_to_reuse;
         }
-        // Answer from LWS_CALLBACK_HTTP_BODY_COMPLETION, once xclip has it.
-        pss->post = POST_CLIPBOARD;
+        // Answer from LWS_CALLBACK_HTTP_BODY_COMPLETION once the worker has
+        // durably stored the image.
+        pss->post = POST_IMAGE;
         pss->body_max = MAX_IMAGE_BYTES;
         return 0;
       }
@@ -656,22 +649,28 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       if (pss->post == POST_NONE) goto try_to_reuse;
 
       if (pss->body_too_large) {
-        json_result(pss, HTTP_STATUS_REQ_ENTITY_TOO_LARGE, "body too large");
+        json_result(pss, HTTP_STATUS_REQ_ENTITY_TOO_LARGE, NULL, "body too large");
       } else if (pss->body_len == 0) {
-        json_result(pss, HTTP_STATUS_BAD_REQUEST, "empty body");
+        json_result(pss, HTTP_STATUS_BAD_REQUEST, NULL, "empty body");
       } else if (pss->post == POST_TABS) {
         tabs_store(pss);
       } else {
+        static const unsigned char png_signature[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+        if (pss->body_len < sizeof(png_signature) ||
+            memcmp(pss->body, png_signature, sizeof(png_signature)) != 0) {
+          json_result(pss, HTTP_STATUS_BAD_REQUEST, NULL, "body is not a PNG image");
+          return 0;
+        }
+
         int err = 0;
         char *data = pss->body;
         size_t data_len = pss->body_len;
-        pss->body = NULL;  // ownership passes to the clipboard request
+        pss->body = NULL;  // ownership passes to the image worker
         pss->body_len = 0;
 
-        pss->clip = clipboard_set_image(server->loop, data, data_len, clipboard_done, pss, &err);
-        if (pss->clip == NULL)
-          json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR,
-                      err == UV_ENOENT ? "xclip not installed" : uv_strerror(err));
+        pss->image_upload = image_upload_store(server->loop, data, data_len, image_upload_done, pss, &err);
+        if (pss->image_upload == NULL)
+          json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL, uv_strerror(err));
       }
       return 0;
 
@@ -684,9 +683,15 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         pss->json_reply = false;
         pss->post = POST_NONE;
 
-        size_t n = pss->json_status == HTTP_STATUS_OK
-                       ? (size_t)snprintf(buf, sizeof(buf), "{\"ok\": true}")
-                       : (size_t)snprintf(buf, sizeof(buf), "{\"error\": \"%s\"}", pss->json_error);
+        json_object *reply = json_object_new_object();
+        if (pss->json_status == HTTP_STATUS_OK && pss->json_path[0] != '\0')
+          json_object_object_add(reply, "path", json_object_new_string(pss->json_path));
+        else if (pss->json_status == HTTP_STATUS_OK)
+          json_object_object_add(reply, "ok", json_object_new_boolean(true));
+        else
+          json_object_object_add(reply, "error", json_object_new_string(pss->json_error));
+        const char *json = json_object_to_json_string_ext(reply, JSON_C_TO_STRING_PLAIN);
+        size_t n = strlen(json);
 
         p = buffer + LWS_PRE;
         end = p + sizeof(buffer) - LWS_PRE;
@@ -699,8 +704,9 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
           return 1;
 
-        pss->buffer = pss->ptr = strdup(buf);
+        pss->buffer = pss->ptr = strdup(json);
         pss->len = n;
+        json_object_put(reply);
         // fall through to write the body out below
       }
 

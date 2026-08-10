@@ -119,7 +119,7 @@ retire_legacy() {
     # Sparing the cgroup is the point, but it also spares the retired server's
     # own children — and the webpack UI's real process is a child of yarn, so
     # it would keep the public port and the new unit could never bind. Retire
-    # those by name; anything else in there (tmux, Xvfb, xclip) stays up.
+    # those by name; anything else in there (notably tmux) stays up.
     if [[ -f $procs ]]; then
         while read -r pid; do
             comm="$(cat "/proc/$pid/comm" 2>/dev/null)" || continue

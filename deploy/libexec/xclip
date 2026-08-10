@@ -1,0 +1,56 @@
+#!/bin/bash
+# Read-only, X11-free subset of xclip used by Claude Code for image paste.
+
+set -u
+
+target=""
+output=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -selection)
+            [ $# -ge 2 ] || exit 1
+            shift 2
+            ;;
+        -t|-target)
+            [ $# -ge 2 ] || exit 1
+            target="$2"
+            shift 2
+            ;;
+        -o|-out)
+            output=1
+            shift
+            ;;
+        *)
+            exit 1
+            ;;
+    esac
+done
+
+[ "$output" = 1 ] || exit 1
+
+case "$target" in
+    TARGETS)
+        printf 'image/png\n'
+        exit 0
+        ;;
+    image/png)
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+
+temp_dir="${TMPDIR:-/tmp}"
+while [ "$temp_dir" != "/" ] && [ "${temp_dir%/}" != "$temp_dir" ]; do
+    temp_dir="${temp_dir%/}"
+done
+pointer="$temp_dir/ttyd-image-current-$(id -u)"
+[ -f "$pointer" ] && [ -O "$pointer" ] || exit 1
+
+IFS= read -r image_path < "$pointer" || exit 1
+case "$image_path" in
+    "$temp_dir"/ttyd-image-paste-*) ;;
+    *) exit 1 ;;
+esac
+[ -f "$image_path" ] && [ -O "$image_path" ] || exit 1
+exec /bin/cat -- "$image_path"

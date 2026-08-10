@@ -62,19 +62,13 @@ if [ -n "${HOME:-}" ]; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-SHELL_CMD="${SHELL:-/bin/bash}"
+# Claude Code implements image paste on Linux by reading image/png through
+# xclip. The Claude launch below puts ttyd-pro's read-only, X11-free helper at
+# the front of that process's PATH only; it does not modify the shell or the
+# user's system xclip installation.
+LIBEXEC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../libexec" && pwd)"
 
-# Clipboard bridge: Claude Code reads a pasted image off the X clipboard
-# (`xclip -selection clipboard -t image/png -o`), so a session only sees
-# browser-pasted images if DISPLAY points at the headless display holding
-# them — see start-clipboard-x.sh. start-ttyd.sh normally exports this and we
-# inherit it; setting it here too keeps sessions working when ttyd was started
-# some other way. Only filled in when unset, so a VNC/xpra session that chose
-# its own DISPLAY keeps it.
-: "${TTYD_CLIP_DISPLAY:=:77}"
-if [ -z "${DISPLAY:-}" ] && [ -e "/tmp/.X11-unix/X${TTYD_CLIP_DISPLAY#:}" ]; then
-    export DISPLAY="$TTYD_CLIP_DISPLAY"
-fi
+SHELL_CMD="${SHELL:-/bin/bash}"
 
 sanitize() {
     printf '%s' "$1" | tr -cd 'A-Za-z0-9._-' | cut -c1-64
@@ -268,8 +262,13 @@ if [ "$AGENT_ENABLED" = 1 ]; then
                     ;;
             esac
         fi
+        AGENT_LAUNCH="$AGENT_CMD"
+        if [ "$AGENT_CMD" = "claude" ] && [ -x "$LIBEXEC_DIR/xclip" ]; then
+            AGENT_PATH="$(printf '%q' "$LIBEXEC_DIR:$PATH")"
+            AGENT_LAUNCH="env PATH=$AGENT_PATH claude"
+        fi
         tmux new-session -d -s "$NAME" \
-            "$AGENT_CMD${quoted}; exec $SHELL_CMD"
+            "$AGENT_LAUNCH${quoted}; exec $SHELL_CMD"
     fi
 else
     tmux new-session -d -s "$NAME"

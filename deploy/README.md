@@ -33,7 +33,7 @@ Lightweight web terminal accessible from any browser. **One process, one port** 
 Add to your `dev.nix`:
 
 The `ttyd` binary is **built from this repo**, not installed from a package —
-stock ttyd serves its own default UI and has no `/clipboard-image` endpoint.
+stock ttyd serves its own default UI and has no `/image-upload` endpoint.
 `start-ttyd.sh` builds it for you; you only need the build and runtime deps:
 
 ```nix
@@ -138,7 +138,7 @@ That renders `deploy/systemd/ttyd.service` for this host (user = whoever owns
 the checkout), seeds `/etc/default/ttyd` from
 `deploy/systemd/ttyd.env.example` with a generated password, then enables and
 starts it. The unit runs `start-ttyd.sh --foreground`, so the service and a
-manual start share one code path — same flags, same clipboard bridge, same
+manual start share one code path — same flags, same image bridge, same
 tmux persistence.
 
 ```bash
@@ -208,7 +208,6 @@ your tmux sessions — down, and removes their private launcher scripts.
 | `TTYD_PORT` | Public port (default 10090) |
 | `TTYD_BIND` | Bind address (default 0.0.0.0) |
 | `TTYD_BIN` | ttyd binary to run (default: the fork's `build/ttyd`) |
-| `TTYD_CLIP_DISPLAY` | X display holding the paste clipboard (default `:77`) |
 | `TTYD_SESSION_ARGS` | Wrapper args for a bare URL, e.g. `cwd:/srv/app name:main` |
 
 ---
@@ -226,7 +225,7 @@ your tmux sessions — down, and removes their private launcher scripts.
 │   /                → vkbd UI (html.h)    │
 │   /ws              → PTY                 │
 │   /token           → basic-auth token    │
-│   /clipboard-image → xclip (clipboard.c) │
+│   /image-upload    → temp PNG (image_upload.c) │
 │   /tabs            → tab layout store    │
 └────────┬─────────────────────────────────┘
          │
@@ -243,7 +242,7 @@ tree to deploy, no Node runtime on the box, and no second port to firewall.
 
 **Editing the front-end.** Rebuilding the binary on every CSS tweak is
 miserable, so `start-ttyd-ui.sh` still exists: it runs the webpack dev server
-(port 9000) with hot reload and proxies `/ws`, `/token`, `/clipboard-image`
+(port 9000) with hot reload and proxies `/ws`, `/token`, `/image-upload`
 and `/tabs` to the real ttyd. When you're happy, `yarn build` bakes the result back into
 `src/html.h` and the next `start-ttyd.sh` picks it up.
 
@@ -326,42 +325,46 @@ tmux source-file ~/.tmux.conf
 
 ---
 
-## Image Paste (screenshots into Claude Code)
+## Image Paste (screenshots into Claude Code and Codex)
 
-Paste or drag an image into the terminal and Claude Code receives it as a real
-`[Image #1]` chip — same as a native terminal.
+Paste or drag an image into the terminal and Claude Code or Codex receives it
+as a real `[Image #1]` attachment — without a desktop, host clipboard, or X
+server.
 
-**Why it needs machinery.** Claude Code doesn't read images from the terminal
-stream; it reads them off the **X clipboard**:
+The browser re-encodes the image as PNG and sends it to the authenticated
+`/image-upload` endpoint. ttyd writes it on libuv's worker pool to a private,
+randomly named file in the operating system's temporary directory and returns
+the absolute path. What the UI sends next depends on the agent modifier in the
+terminal URL:
+
+- **Codex** receives the returned path as a bracketed paste. Codex validates
+  explicitly pasted image paths and converts them into native attachments.
+- **Claude Code** receives Ctrl+V after the upload completes. On Linux Claude
+  asks `xclip` for `image/png`; `ttyd-session.sh` puts the repo-local,
+  read-only `deploy/libexec/xclip` first on the Claude process's PATH. That
+  helper reads the latest uploaded PNG directly, without talking to X11 or
+  replacing the system `xclip`.
 
 ```
-xclip -selection clipboard -t TARGETS -o | grep image/png    # detect
-xclip -selection clipboard -t image/png -o > tmpfile          # read
+Browser paste/drop ──POST /image-upload──▶ ttyd ──▶ /tmp/ttyd-image-paste-XXXXXX
+                                                    │
+                         ┌──────────────────────────┴──────────────────────┐
+                         │                                                 │
+              Codex: bracketed path                         Claude: Ctrl+V + local
+                         │                                  image/png reader (no X11)
+                         └──────────────────────────┬──────────────────────┘
+                                                    ▼
+                                               [Image #1]
 ```
 
-A browser tab can't reach the host clipboard, and a headless server has no X
-session at all — so Ctrl+V finds nothing. The bridge supplies both halves:
+The physical Ctrl+V key is suppressed while the browser paste event runs, so
+the foreground agent cannot race ahead of the asynchronous upload.
 
-```
-Browser paste/drop  ──POST /clipboard-image──▶  ttyd (src/clipboard.c)
-                                                      │ xclip -i (stdin)
-                                                      ▼
-                                            X clipboard on :77  (Xvfb, 1x1)
-                                                      ▲
-   UI sends Ctrl+V (0x16) ──▶ tmux ──▶ claude ────────┘  reads it, shows [Image #1]
-```
-
-The bytes are piped to `xclip` asynchronously on ttyd's libuv loop — an 8 MB
-paste is far past a pipe buffer, and a blocking write would stall every other
-terminal on the server. The reply waits for `xclip`'s parent to exit rather
-than merely for the write to flush: `xclip` forks into the background only
-*after* it has claimed the selection, so a missing display or a missing
-`xclip` comes back as a real error instead of a success followed by a paste
-that does nothing.
-
-`start-clipboard-x.sh` runs a 1x1 headless display (~3 MB) whose only job is
-holding a clipboard selection. It is deliberately separate from the VNC (`:1`)
-and xpra (`:100`) displays so image paste doesn't depend on a desktop running.
+Use `?arg=codex&arg=<session>` or `?arg=claude&arg=<session>` so the UI selects
+the native integration deterministically. After upgrading, recreate an
+already-running Claude tmux session once through the `claude` route so the new
+process inherits the helper at the front of `PATH`; Codex panes do not need
+that helper.
 
 **How to use it**
 
@@ -371,30 +374,22 @@ and xpra (`:100`) displays so image paste doesn't depend on a desktop running.
 | Mobile | the **🖼** key in the vkbd `readline` group (opens gallery/camera) |
 
 Images are re-encoded to PNG in the browser and capped at 1568px on the long
-edge — Claude's vision pipeline downscales past that anyway, so this costs no
-fidelity and keeps mobile uploads small.
+edge to keep mobile uploads small.
 
-**Requirements**: `pkgs.xclip` and `pkgs.xorg.xorgserver` (both in
-`dev.nix.template`). Without them everything else still works; only image paste
-is disabled, and `status-ttyd.sh` reports it as stopped.
-
-**Caveat — already-running sessions.** `DISPLAY` reaches the agent by being
-exported before ttyd starts, so tmux panes created *before* the bridge came up
-still have no `DISPLAY` and will silently find no image. Restart the affected
-session (or `export DISPLAY=:77` in that pane) after enabling this the first
-time.
-
-**Security**: `/clipboard-image` is gated by the same credential as the
+**Security**: `/image-upload` is gated by the same credential as the
 terminal — ttyd's `/token` hands the browser `base64("user:pass")` and the
 client replays it in an `Authorization: Basic` header. Bodies over 12 MB are
-rejected. Nothing is written to disk: the image is piped to `xclip` via stdin.
+rejected and non-PNG bodies are refused. Temporary files use the platform's
+secure temp-file primitive and stale ttyd image uploads are removed after 24
+hours when the next image is stored. The Claude compatibility pointer is
+per-user, atomically replaced, and readable only by that user.
 
 ---
 
 ## Security Notes
 
 - **One exposed port**: ttyd binds `0.0.0.0:10090` by default. Pass `-b 127.0.0.1` to keep it local and reach it through a tunnel or reverse proxy instead.
-- **Password protection**: enabled by default with a random password. `/` and `/token` are gated by HTTP Basic Auth; `/clipboard-image` and `/tabs` by the same credential, replayed by the client in an `Authorization` header.
+- **Password protection**: enabled by default with a random password. `/` and `/token` are gated by HTTP Basic Auth; `/image-upload` and `/tabs` by the same credential, replayed by the client in an `Authorization` header.
 - **Remembered logins**: browsers forget basic-auth credentials constantly — a restart, a new PWA window, an iOS tab that got evicted — and each time the native password prompt comes back. So a successful login also gets a `ttyd_session` cookie (`HttpOnly`, `SameSite=Lax`, `Secure` when the request arrived over TLS or through a proxy that set `X-Forwarded-Proto: https`), good for **30 days** and renewed whenever it is more than half used up. The cookie carries only a random token; the tokens themselves live in `$XDG_STATE_HOME/ttyd/sessions` (`~/.local/state/ttyd/sessions`, `0600`), so a ttyd restart does not log anyone out.
 
   ```bash
@@ -653,13 +648,14 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     │   ├── setup-ubuntu-vps.sh # One-shot build + install + start on a fresh VPS
     │   ├── install-systemd.sh # Install the unit; retire the old two-process setup
     │   ├── start-ttyd.sh     # Build if needed, then start ttyd (+ tmux persistence)
-    │   ├── stop-ttyd.sh      # Stop ttyd and the clipboard bridge
+    │   ├── stop-ttyd.sh      # Stop ttyd
     │   ├── status-ttyd.sh    # Check status
     │   ├── start-ttyd-ui.sh  # DEV ONLY: webpack hot-reload server on :9000
     │   ├── stop-ttyd-ui.sh   # Stop the dev server
-    │   ├── start-clipboard-x.sh # Headless X (:77) holding the paste clipboard
     │   ├── resurrect-agent-hook.sh # Restore claude/codex panes into their own conversation
     │   └── ttyd-session.sh   # URL-arg routing → tmux / screen
+    ├── libexec/
+    │   └── xclip             # Read-only image/png helper for Claude; no X11
     └── README.md             # This file
 ```
 
