@@ -1,0 +1,11 @@
+packages:
+  - .
+
+allowBuilds:
+  # pnpm 11 blocks dependency lifecycle scripts unless explicitly approved.
+  # These packages compile their platform helpers during install.
+  '@parcel/watcher': true
+  es5-ext: true
+
+patchedDependencies:
+  zmodem.js@0.1.10: patches/zmodem.js@0.1.10.patch

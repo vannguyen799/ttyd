@@ -4,7 +4,7 @@
 #
 # The normal deployment does NOT use this — start-ttyd.sh runs a single ttyd
 # process that serves the UI from src/html.h. Use this while editing html/,
-# then `yarn build` to bake the result back into the binary.
+# then `pnpm build` to bake the result back into the binary.
 #
 # Serves http://localhost:$PORT and proxies /ws, /token and /image-upload
 # to the ttyd instance on $TTYD_PORT (default 10090).
@@ -31,24 +31,23 @@ if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$PORT\$"; then
   exit 0
 fi
 
-# Enable corepack yarn if needed
-if ! command -v yarn >/dev/null 2>&1; then
+# Enable corepack pnpm if needed
+if ! command -v pnpm >/dev/null 2>&1; then
   corepack enable >/dev/null 2>&1 || true
 fi
-if ! command -v yarn >/dev/null 2>&1; then
-  echo "[ttyd-ui] error: yarn not found. Enable corepack or install node >=12." >&2
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "[ttyd-ui] error: pnpm not found. Enable corepack or install Node.js >=20." >&2
   exit 1
 fi
 
 cd "$HTML_DIR"
 
-# Install deps if missing
-if [[ ! -d node_modules ]]; then
-  echo "[ttyd-ui] installing deps in $HTML_DIR..."
-  yarn install >/tmp/ttyd-ui-install.log 2>&1
-fi
+# Keep node_modules synchronized after a pull as well as on first use. pnpm's
+# content-addressed store makes the no-change path quick.
+echo "[ttyd-ui] syncing deps in $HTML_DIR..."
+pnpm install --frozen-lockfile --prefer-offline >/tmp/ttyd-ui-install.log 2>&1
 
-nohup yarn webpack serve \
+nohup pnpm webpack serve \
   --port "$PORT" \
   --host 0.0.0.0 \
   --allowed-hosts all \

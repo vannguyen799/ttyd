@@ -16,6 +16,30 @@ on:
   workflow_call:
 
 jobs:
+  macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: brew install cmake json-c libuv libwebsockets openssl@3
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+          cmake --build build --parallel
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ttyd.macos-${{ matrix.arch }}
+          path: build/ttyd
+
   msvc:
     runs-on: windows-latest
     env:
@@ -68,4 +92,3 @@ jobs:
         with:
           name: ttyd.${{ matrix.target }}
           path: build/ttyd*
-

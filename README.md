@@ -55,10 +55,58 @@ clipboard internals, session routing, and persistence in depth.
 - Basic authentication support and many other custom options
 - Cross platform: macOS, Linux, FreeBSD/OpenBSD, [OpenWrt](https://openwrt.org), Windows
 
-# Quick start
+# Install
 
-The fastest path is the deploy kit. One process serves everything — the vkbd UI, the terminal
-WebSocket and image paste:
+The release installer is user-scoped: it writes to `~/.local/bin` and never invokes `sudo`.
+Running the same command again updates the existing binary. The custom web UI is embedded in the
+binary, so this is the complete CLI installation rather than a reduced client.
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vannguyen799/ttyd-pro/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/vannguyen799/ttyd-pro/main/install.ps1 | iex"
+```
+
+Then start a writable terminal, for example:
+
+```bash
+ttyd-pro -W bash
+```
+
+## User-scoped auto-update
+
+Auto-update is opt-in. It installs a daily job owned by the current user—systemd user timer on
+Linux, LaunchAgent on macOS, or Task Scheduler on Windows. It downloads only published GitHub
+Release assets and verifies `SHA256SUMS`. No root task or `sudo` rule is created.
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vannguyen799/ttyd-pro/main/install.sh | sh -s -- --auto-update
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/vannguyen799/ttyd-pro/main/install.ps1'))) -AutoUpdate"
+```
+
+On macOS/Linux, the updater atomically replaces the installed file; a running ttyd process keeps
+using its current version until it is restarted, so the job does not kill live terminal/tmux
+sessions. Windows skips unchanged releases too, but an in-use executable may need ttyd to be
+stopped before a changed binary can be installed. Use `--disable-auto-update` (or
+`-DisableAutoUpdate` on Windows) to remove the job.
+
+# Deploy quick start
+
+For a source checkout or a managed VPS service, use the deploy kit. One process serves everything
+— the vkbd UI, the terminal WebSocket and image paste:
 
 ```bash
 bash deploy/scripts/start-ttyd.sh
@@ -89,8 +137,24 @@ and restarts leave live tmux sessions untouched:
 sudo bash deploy/scripts/install-systemd.sh
 ```
 
-On a fresh Ubuntu VPS, `bash deploy/scripts/setup-ubuntu-vps.sh` builds, installs, and starts
-everything in one shot.
+On a fresh Ubuntu VPS, `bash deploy/scripts/setup-ubuntu-vps.sh` installs OS build dependencies,
+builds, and starts everything in one shot. That VPS bootstrap uses `sudo` for `apt` and
+`/usr/local/bin`; use the release installer above when a user-scoped binary is what you want.
+
+# Publishing a release
+
+GitHub Actions builds Linux, macOS, and Windows binaries, publishes them with `SHA256SUMS`, and
+publishes multi-architecture container images to this repository's GHCR namespace. To publish a
+new CLI version, update `project(ttyd VERSION ...)` in `CMakeLists.txt`, then push the matching
+`vMAJOR.MINOR.PATCH` tag. For example:
+
+```bash
+git tag v1.8.0
+git push origin v1.8.0
+```
+
+The public installer starts working after that tag's release workflow completes. Releases are not
+drafts; the newest semantic-version tag becomes GitHub's latest release.
 
 # Build from source
 
@@ -111,15 +175,16 @@ dependencies (libwebsockets, libuv, json-c, OpenSSL/Mbed TLS).
 
 The custom UI lives in `html/` and compiles to the embedded `src/html.h`.
 
-> **NOTE:** yarn v2 is required.
+> **NOTE:** Node.js 20+ and pnpm are required. Corepack can provide the pinned pnpm version.
 
 ```bash
 cd html
-yarn install
-yarn run build     # builds the UI and inlines it into ../src/html.h
+corepack enable
+pnpm install
+pnpm build     # builds the UI and inlines it into ../src/html.h
 ```
 
-For UI development, run `yarn run start` (webpack dev server) against a running `ttyd bash`.
+For UI development, run `pnpm start` (webpack dev server) against a running `ttyd bash`.
 
 # Usage
 

@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["*"]
+    tags: ["v*.*.*"]
 
 jobs:
   build:
@@ -10,29 +10,39 @@ jobs:
   publish:
     needs: [build]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
       - name: Check version bump
         run: |
-          TAG=$(git describe --tags --match "[0-9]*.[0-9]*.[0-9]*" --abbrev=8)
-          VERSION=$(grep project CMakeLists.txt| awk '{print $3}')
+          TAG=${GITHUB_REF_NAME#v}
+          VERSION=$(sed -nE 's/.*project\(ttyd VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
           if [ "$TAG" != "$VERSION" ]; then
             echo "=== Version in CMakeLists.txt and git tag does not match!"
             echo "=== Git Tag: $TAG, Version: $VERSION"
             exit 1
           fi
       - uses: actions/download-artifact@v8
-        
-      - run: |
-          mkdir build
-          for file in ttyd.*/*; do
-            target=$(echo $file | awk -F/ '{print $1}')
-            [[ $file == *.exe ]] && target="$target.exe"
-            mv $file build/$target
+        with:
+          path: artifacts
+      - name: Prepare release assets
+        run: |
+          mkdir release
+          for arch in i686 x86_64 arm armhf aarch64 mips mipsel mips64 mips64el ppc64 ppc64le s390x; do
+            cp "artifacts/ttyd.${arch}/ttyd" "release/ttyd-pro-linux-${arch}"
           done
-          pushd build; sha256sum ttyd.* > SHA256SUMS; popd
+          cp artifacts/ttyd.macos-x86_64/ttyd release/ttyd-pro-macos-x86_64
+          cp artifacts/ttyd.macos-aarch64/ttyd release/ttyd-pro-macos-aarch64
+          cp artifacts/ttyd.msvc/ttyd.exe release/ttyd-pro-windows-x86_64.exe
+          cp install.sh install.ps1 release/
+          chmod 0755 release/ttyd-pro-* release/install.sh
+          cd release
+          sha256sum ttyd-pro-* install.sh install.ps1 > SHA256SUMS
       - uses: ncipollo/release-action@v1
         with:
-          artifacts: build/*
+          artifacts: release/*
           allowUpdates: true
-          draft: true
+          draft: false
+          generateReleaseNotes: true
+          makeLatest: true

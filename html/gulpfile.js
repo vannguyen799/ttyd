@@ -3,7 +3,7 @@ const clean = require('gulp-clean');
 const gzip = require('gulp-gzip');
 const inlineSource = require('gulp-inline-source');
 const rename = require('gulp-rename');
-const through2 = require('through2');
+const through2 = require('through2').default;
 
 const genHeader = (size, buf, len) => {
     let idx = 0;
@@ -52,7 +52,7 @@ task(
                 through2.obj((file, enc, cb) => {
                     fileSize = file.contents.length;
                     return cb(null, file);
-                })
+                }),
             )
             .pipe(gzip())
             .pipe(
@@ -60,9 +60,9 @@ task(
                     const buf = file.contents;
                     file.contents = Buffer.from(genHeader(fileSize, buf, buf.length));
                     return cb(null, file);
-                })
+                }),
             )
             .pipe(rename('html.h'))
             .pipe(dest('../src/'));
-    })
+    }),
 );

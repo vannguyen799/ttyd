@@ -3,7 +3,7 @@ find_package(Git)
 function(get_git_version var1 var2)
   if(GIT_EXECUTABLE)
     execute_process(
-      COMMAND ${GIT_EXECUTABLE} describe --tags --match "[0-9]*.[0-9]*.[0-9]*" --abbrev=8
+      COMMAND ${GIT_EXECUTABLE} describe --tags --match "[0-9]*.[0-9]*.[0-9]*" --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=8
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       RESULT_VARIABLE status
       OUTPUT_VARIABLE GIT_VERSION
@@ -12,6 +12,7 @@ function(get_git_version var1 var2)
       set(GIT_VERSION "0.0.0")
     else()
       string(STRIP ${GIT_VERSION} GIT_VERSION)
+      string(REGEX REPLACE "^v" "" GIT_VERSION ${GIT_VERSION})
       string(REGEX REPLACE "-[0-9]+-g" "-" GIT_VERSION ${GIT_VERSION})
     endif()
   else()

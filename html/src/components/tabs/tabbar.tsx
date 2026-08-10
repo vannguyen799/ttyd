@@ -453,7 +453,7 @@ export class TabBar extends Component<Props, State> {
         max: number,
         step: number,
         title: string,
-        onSet: (v: number) => void
+        onSet: (v: number) => void,
     ) {
         return (
             <div class="tabbar-range-control">
@@ -490,7 +490,7 @@ export class TabBar extends Component<Props, State> {
             1.6,
             0.05,
             'Zoom the whole bar',
-            this.props.onSetScale
+            this.props.onSetScale,
         );
     }
 
@@ -506,7 +506,7 @@ export class TabBar extends Component<Props, State> {
             BAR_OPACITY_MAX,
             0.05,
             'Fade the tabs and buttons into the terminal behind them',
-            this.props.onSetOpacity
+            this.props.onSetOpacity,
         );
     }
 
@@ -538,8 +538,8 @@ export class TabBar extends Component<Props, State> {
                     editing
                         ? undefined
                         : asleep
-                        ? `${t.session} — sleeping (click to reconnect)`
-                        : `${t.session} — double-click or press-and-hold to rename`
+                          ? `${t.session} — sleeping (click to reconnect)`
+                          : `${t.session} — double-click or press-and-hold to rename`
                 }
                 onClick={() => this.onChipClick(t.id, inMenu)}
                 onDblClick={() => this.startRename(t)}
@@ -555,7 +555,9 @@ export class TabBar extends Component<Props, State> {
                 {editing ? (
                     <input
                         class="tab-rename"
-                        ref={el => (this.renameEl = el)}
+                        ref={el => {
+                            this.renameEl = el;
+                        }}
                         value={this.state.editValue}
                         autocomplete="off"
                         spellcheck={false}
@@ -662,7 +664,9 @@ export class TabBar extends Component<Props, State> {
                 <div
                     class={`tabbar tabbar-menu${autoHideCls}`}
                     style={styleProp}
-                    ref={el => (this.rootEl = el)}
+                    ref={el => {
+                        this.rootEl = el;
+                    }}
                     onPointerDown={e => e.stopPropagation()}
                     onPointerEnter={this.onBarEnter}
                     onPointerLeave={this.onBarLeave}
@@ -713,7 +717,9 @@ export class TabBar extends Component<Props, State> {
             <div
                 class={`tabbar tabbar-strip tabbar-${position}${autoHideCls}`}
                 style={styleProp}
-                ref={el => (this.rootEl = el)}
+                ref={el => {
+                    this.rootEl = el;
+                }}
                 onPointerDown={e => e.stopPropagation()}
                 onPointerEnter={this.onBarEnter}
                 onPointerLeave={this.onBarLeave}

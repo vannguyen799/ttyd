@@ -465,7 +465,7 @@ export class SettingsPanel extends Component<Props, FormState> {
                                                 {k.sub ? <em>{k.sub}</em> : null}
                                             </label>
                                         );
-                                    })
+                                    }),
                                 )}
                             </div>
                         </div>
@@ -506,8 +506,8 @@ export class SettingsPanel extends Component<Props, FormState> {
                                     {k.action.type === 'send'
                                         ? encodeForDisplay(k.action.bytes)
                                         : k.action.type === 'text'
-                                        ? `text: ${k.action.text}`
-                                        : k.action.type}
+                                          ? `text: ${k.action.text}`
+                                          : k.action.type}
                                 </span>
                                 <button class="vkbd-text-btn" onClick={() => this.startEdit(k)}>
                                     Edit

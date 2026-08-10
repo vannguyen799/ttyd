@@ -117,14 +117,15 @@ retire_legacy() {
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
 
     # Sparing the cgroup is the point, but it also spares the retired server's
-    # own children — and the webpack UI's real process is a child of yarn, so
+    # own children — and the webpack UI's real process is a child of a package
+    # manager, so
     # it would keep the public port and the new unit could never bind. Retire
     # those by name; anything else in there (notably tmux) stays up.
     if [[ -f $procs ]]; then
         while read -r pid; do
             comm="$(cat "/proc/$pid/comm" 2>/dev/null)" || continue
             case "$comm" in
-                ttyd|node|webpack|yarn|npm) ;;
+                ttyd|node|webpack|pnpm|yarn|npm) ;;
                 *) continue ;;
             esac
             # …unless it is someone's own process inside a terminal session: a

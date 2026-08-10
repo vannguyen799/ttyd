@@ -1,8 +1,9 @@
-name: ttyd
-adopt-info: ttyd
-summary: Share your terminal over the web
+name: ttyd-pro
+adopt-info: ttyd-pro
+summary: Mobile-first terminal sharing over the web
 description: |
- ttyd is a simple command-line tool for sharing terminal over the web
+ ttyd-pro embeds a mobile-first terminal UI, virtual keyboard, tabs, and
+ image-paste support in a single ttyd-compatible binary.
 
 grade: stable
 confinement: classic
@@ -15,14 +16,14 @@ assumes:
   - command-chain
 
 apps:
-  ttyd:
+  ttyd-pro:
     command: usr/bin/ttyd
     command-chain: 
       - bin/homeishome-launch       
 
 parts:
-  ttyd:
-    source: https://github.com/tsl0922/ttyd
+  ttyd-pro:
+    source: https://github.com/vannguyen799/ttyd-pro
     source-type: git
     plugin: cmake
     cmake-parameters:

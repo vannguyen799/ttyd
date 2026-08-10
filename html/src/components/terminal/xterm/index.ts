@@ -51,7 +51,7 @@ const MAX_IMAGE_DIM = 1568;
 // the provider lands in the slot the runtime actually reads.
 const ClipboardAddonCtor = ClipboardAddon as unknown as new (
     base64: IBase64,
-    provider: IClipboardProvider
+    provider: IClipboardProvider,
 ) => ClipboardAddon;
 
 // Does this OSC 52 selection field mean "the system clipboard"?
@@ -84,7 +84,7 @@ async function toPngBlob(src: Blob): Promise<Blob> {
         if (!ctx) throw new Error('canvas 2d context unavailable');
         ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
         return await new Promise<Blob>((resolve, reject) =>
-            canvas.toBlob(b => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png')
+            canvas.toBlob(b => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'),
         );
     } finally {
         bitmap.close();
@@ -232,7 +232,7 @@ export class Xterm {
         private sendCb: () => void,
         // Bubbles the terminal's window/process title up to the tab bar so the
         // owning tab chip can relabel itself.
-        private onTitle?: (title: string) => void
+        private onTitle?: (title: string) => void,
     ) {}
 
     // Coalesce fit() calls to one per frame, skip invalid/no-op dims, and
@@ -612,7 +612,7 @@ export class Xterm {
                 buttons: type === 'mouseup' ? 0 : 1,
                 // xterm's selection mousedown only starts on detail===1.
                 detail: type === 'mousedown' ? 1 : 0,
-            })
+            }),
         );
     }
 
@@ -824,7 +824,7 @@ export class Xterm {
                         (event: Event) => {
                             if (event.isTrusted) ta.inputMode = 'text';
                         },
-                        true
+                        true,
                     );
                     ta.addEventListener('blur', () => {
                         ta.inputMode = 'none';
@@ -928,7 +928,7 @@ export class Xterm {
                     clientY: pt.y,
                     bubbles: true,
                     cancelable: true,
-                })
+                }),
             );
         };
 
@@ -1093,7 +1093,7 @@ export class Xterm {
             addEventListener(document, 'visibilitychange', resume),
             addEventListener(window, 'pageshow', resume),
             addEventListener(window, 'focus', resume),
-            addEventListener(window, 'online', resume)
+            addEventListener(window, 'online', resume),
         );
     }
 
@@ -1105,7 +1105,7 @@ export class Xterm {
         this.pendingReconnectKey = undefined;
         this.overlayAddon.showOverlay('Reconnecting...');
         this.dispose();
-        this.refreshToken().then(this.connect);
+        void this.refreshToken().then(this.connect);
     }
 
     @bind
@@ -1123,7 +1123,7 @@ export class Xterm {
                         document.title = data + ' | ' + this.title;
                     }
                 }
-            })
+            }),
         );
         register(terminal.onData(data => sendData(data)));
         register(terminal.onBinary(data => sendData(Uint8Array.from(data, v => v.charCodeAt(0)))));
@@ -1132,7 +1132,7 @@ export class Xterm {
                 const msg = JSON.stringify({ columns: cols, rows: rows });
                 this.socket?.send(this.textEncoder.encode(Command.RESIZE_TERMINAL + msg));
                 if (this.resizeOverlay) overlayAddon.showOverlay(`${cols}x${rows}`, 300);
-            })
+            }),
         );
         register(
             terminal.onSelectionChange(() => {
@@ -1146,7 +1146,7 @@ export class Xterm {
                 const lines = sel.split('\n').length;
                 this.overlayAddon?.showOverlay(`${sel.length}c/${lines}L \u2702`, 1200);
                 this.showSelTip(sel);
-            })
+            }),
         );
         register(addEventListener(window, 'resize', () => this.safeFit()));
         register(addEventListener(window, 'beforeunload', this.onWindowUnload));

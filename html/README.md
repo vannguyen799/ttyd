@@ -1,14 +1,14 @@
 ## Prerequisites
 
-> **NOTE:** yarn v2 is required.
+> **NOTE:** Node.js 20+ is required. The pnpm version is pinned in `package.json`.
 
-Install [Yarn](https://yarnpkg.com/getting-started/install), and run: `yarn install`.
+Enable Corepack and install dependencies with `corepack enable && pnpm install`.
 
 ## Development
 
 1. Start ttyd: `ttyd bash`
-2. Start the dev server: `yarn run start`
+2. Start the dev server: `pnpm start`
 
 ## Publish
 
-Run `yarn run build`, this will compile the inlined html to `../src/html.h`.
+Run `pnpm build`; this compiles the inlined HTML to `../src/html.h`.

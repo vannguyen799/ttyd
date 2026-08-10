@@ -1,5 +1,5 @@
 diff --git a/src/zsession.js b/src/zsession.js
-index 5f0b8f9d8afa6fba0acd6dd0477afa186f7aad9a..c7ea98e0f08c97d63d321f784a5dd8bf66888743 100644
+index 5f0b8f9..c7ea98e 100644
 --- a/src/zsession.js
 +++ b/src/zsession.js
 @@ -548,20 +548,17 @@ Zmodem.Session.Receive = class ZmodemReceiveSession extends Zmodem.Session {

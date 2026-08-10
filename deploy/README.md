@@ -235,7 +235,7 @@ your tmux sessions — down, and removes their private launcher scripts.
 └─────────────────┘
 ```
 
-The whole front-end is compiled into the binary: `yarn build` in `html/`
+The whole front-end is compiled into the binary: `pnpm build` in `html/`
 inlines the bundle into a single HTML file, gzips it and emits it as a C array
 in `src/html.h`, which `src/http.c` serves at `/`. So there is no static file
 tree to deploy, no Node runtime on the box, and no second port to firewall.
@@ -243,7 +243,7 @@ tree to deploy, no Node runtime on the box, and no second port to firewall.
 **Editing the front-end.** Rebuilding the binary on every CSS tweak is
 miserable, so `start-ttyd-ui.sh` still exists: it runs the webpack dev server
 (port 9000) with hot reload and proxies `/ws`, `/token`, `/image-upload`
-and `/tabs` to the real ttyd. When you're happy, `yarn build` bakes the result back into
+and `/tabs` to the real ttyd. When you're happy, `pnpm build` bakes the result back into
 `src/html.h` and the next `start-ttyd.sh` picks it up.
 
 ---

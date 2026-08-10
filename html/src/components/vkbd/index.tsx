@@ -678,8 +678,8 @@ export class VirtualKeyboard extends Component<Props, State> {
         const onPointerDown = isMod
             ? (e: PointerEvent) => this.onModPointerDown(def, e)
             : isRepeat
-            ? (e: PointerEvent) => this.onRepeatPointerDown(def, e)
-            : undefined;
+              ? (e: PointerEvent) => this.onRepeatPointerDown(def, e)
+              : undefined;
         const onPointerUp = isMod ? this.onModPointerUp : isRepeat ? this.onRepeatPointerUp : undefined;
         return (
             <button
@@ -730,7 +730,13 @@ export class VirtualKeyboard extends Component<Props, State> {
         if (settings.keyHeight) keyStyleBase.minHeight = `calc(${settings.keyHeight}px * var(--vkbd-scale))`;
 
         return (
-            <div class={hostClass} style={hostStyle} ref={el => (this.hostEl = el)}>
+            <div
+                class={hostClass}
+                style={hostStyle}
+                ref={el => {
+                    this.hostEl = el;
+                }}
+            >
                 {!settings.visible ? (
                     <button class="vkbd-fab" onClick={this.show} aria-label="Show keyboard">
                         ⌨

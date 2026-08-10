@@ -1,5 +1,5 @@
-@import '../components/vkbd/style.scss';
-@import '../components/tabs/style.scss';
+@use '../components/vkbd/style' as vkbd;
+@use '../components/tabs/style' as tabs;
 
 // Floating selection tooltip — shows selected text preview + Copy button.
 // Appears just below the end of the xterm selection, styled to match the
