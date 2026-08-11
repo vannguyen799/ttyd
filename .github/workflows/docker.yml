@@ -4,6 +4,12 @@ on:
   push:
     branches: main
     tags: ["*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional release tag for published images
+        required: false
+        type: string
 
 jobs:
   build:
@@ -34,11 +40,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Determine docker tags
         id: docker_tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          case $GITHUB_REF in
-            refs/tags/*)
-              TAG_NAME=${GITHUB_REF#refs/tags/}
+          case "${RELEASE_TAG:-$GITHUB_REF}" in
+            refs/tags/*|v*)
+              TAG_NAME=${RELEASE_TAG:-${GITHUB_REF#refs/tags/}}
               echo "DOCKER_TAG=${IMAGE}:${TAG_NAME}" >> $GITHUB_ENV
               echo "ALPINE_TAG=${IMAGE}:${TAG_NAME}-alpine" >> $GITHUB_ENV
               ;;
