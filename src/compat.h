@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
+#define strtok_r strtok_s
 
 #ifndef S_ISDIR
 #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)

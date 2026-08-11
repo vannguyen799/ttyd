@@ -41,7 +41,7 @@ jobs:
           path: build/ttyd
 
   msvc:
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       VCPKG_EXE: ${{ github.workspace }}/vcpkg/vcpkg.exe

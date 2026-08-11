@@ -1,14 +1,12 @@
-#include <errno.h>
 #include <json.h>
 #include <libwebsockets.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 #include <zlib.h>
 
+#include "compat.h"
 #include "html.h"
 #include "server.h"
 #include "utils.h"
@@ -140,41 +138,72 @@ static char *read_file(const char *path, size_t *out_len) {
 
 // Replace `path` with `data`. Written to a sibling temp file and renamed, so a
 // reader (or a crash) never sees a half-written layout — losing the tab list
-// to a torn write would be worse than not saving it at all. Returns an errno
-// on failure, 0 on success.
+// to a torn write would be worse than not saving it at all. Returns a libuv
+// status code on failure, 0 on success.
 static int write_file_atomic(const char *path, const char *data, size_t len) {
-  char *tmp = xmalloc(strlen(path) + 8);
-  sprintf(tmp, "%s.XXXXXX", path);
+  char *tmp_template = xmalloc(strlen(path) + 8);
+  sprintf(tmp_template, "%s.XXXXXX", path);
 
-  int fd = mkstemp(tmp);
+  uv_fs_t open_req;
+  int fd = uv_fs_mkstemp(NULL, &open_req, tmp_template, NULL);
   if (fd < 0) {
-    int err = errno;
-    free(tmp);
-    return err;
+    uv_fs_req_cleanup(&open_req);
+    free(tmp_template);
+    return fd;
   }
+  char *tmp = xmalloc(strlen(open_req.path) + 1);
+  strcpy(tmp, open_req.path);
+  uv_fs_req_cleanup(&open_req);
+  free(tmp_template);
 
-  int err = 0;
+  int status = 0;
   size_t off = 0;
   while (off < len) {
-    ssize_t written = write(fd, data + off, len - off);
+    uv_buf_t buf = uv_buf_init((char *)data + off, (unsigned int)(len - off));
+    uv_fs_t write_req;
+    int written = uv_fs_write(NULL, &write_req, fd, &buf, 1, -1, NULL);
+    uv_fs_req_cleanup(&write_req);
     if (written < 0) {
-      err = errno;
+      status = written;
+      break;
+    }
+    if (written == 0) {
+      status = UV_EIO;
       break;
     }
     off += (size_t)written;
   }
-  if (err == 0 && fsync(fd) != 0) err = errno;
-  if (close(fd) != 0 && err == 0) err = errno;
 
-  if (err == 0) {
-    // 0600: the layout names every session the user has open.
-    if (chmod(tmp, S_IRUSR | S_IWUSR) != 0) err = errno;
+  if (status == 0) {
+    uv_fs_t sync_req;
+    status = uv_fs_fsync(NULL, &sync_req, fd, NULL);
+    uv_fs_req_cleanup(&sync_req);
   }
-  if (err == 0 && rename(tmp, path) != 0) err = errno;
-  if (err != 0) unlink(tmp);
+
+  uv_fs_t close_req;
+  int close_status = uv_fs_close(NULL, &close_req, fd, NULL);
+  uv_fs_req_cleanup(&close_req);
+  if (status == 0 && close_status < 0) status = close_status;
+
+  if (status == 0) {
+    // 0600: the layout names every session the user has open.
+    uv_fs_t chmod_req;
+    status = uv_fs_chmod(NULL, &chmod_req, tmp, 0600, NULL);
+    uv_fs_req_cleanup(&chmod_req);
+  }
+  if (status == 0) {
+    uv_fs_t rename_req;
+    status = uv_fs_rename(NULL, &rename_req, tmp, path, NULL);
+    uv_fs_req_cleanup(&rename_req);
+  }
+  if (status != 0) {
+    uv_fs_t unlink_req;
+    uv_fs_unlink(NULL, &unlink_req, tmp, NULL);
+    uv_fs_req_cleanup(&unlink_req);
+  }
 
   free(tmp);
-  return err;
+  return status;
 }
 
 // ── login sessions ─────────────────────────────────────────────────────────
@@ -260,7 +289,7 @@ static void sessions_save(void) {
   int err = write_file_atomic(server->session_file, buf, n);
   // Not fatal: the sessions still work for as long as this process runs, they
   // just won't survive a restart.
-  if (err != 0) lwsl_warn("session: cannot write %s: %s\n", server->session_file, strerror(err));
+  if (err != 0) lwsl_warn("session: cannot write %s: %s\n", server->session_file, uv_strerror(err));
   free(buf);
 }
 
@@ -453,8 +482,8 @@ static void tabs_store(struct pss_http *pss) {
 
   int err = write_file_atomic(server->tabs_file, pss->body, pss->body_len);
   if (err != 0) {
-    lwsl_err("tabs: cannot write %s: %s\n", server->tabs_file, strerror(err));
-    json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL, strerror(err));
+    lwsl_err("tabs: cannot write %s: %s\n", server->tabs_file, uv_strerror(err));
+    json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL, uv_strerror(err));
     return;
   }
   json_result(pss, HTTP_STATUS_OK, NULL, NULL);
