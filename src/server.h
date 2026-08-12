@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <uv.h>
 
-#include "image_upload.h"
+#include "file_upload.h"
 #include "pty.h"
 
 // client message
@@ -34,7 +34,7 @@ extern struct endpoints endpoints;
 
 // What a POST body being accumulated is destined for. NONE means the request
 // has no body we care about, so anything it sends is dropped on the floor.
-enum post_kind { POST_NONE, POST_IMAGE, POST_TABS };
+enum post_kind { POST_NONE, POST_FILE, POST_TABS };
 
 struct pss_http {
   char path[128];
@@ -42,7 +42,7 @@ struct pss_http {
   char *ptr;
   size_t len;
 
-  // POST body accumulator, shared by /image-upload and /tabs. Image writes run
+  // POST body accumulator, shared by /image-upload and /tabs. File writes run
   // on libuv's worker pool, hence the stored wsi used to wake the response.
   struct lws *wsi;
   enum post_kind post;
@@ -50,13 +50,16 @@ struct pss_http {
   size_t body_len;
   size_t body_max;
   bool body_too_large;
-  image_upload_req *image_upload;
+  // Filename the browser sent for this upload, already percent-decoded but not
+  // yet sanitised — file_upload_store() owns that.
+  char upload_name[256];
+  file_upload_req *upload;
   // A queued JSON answer ({"path": "…"} / {"error": "…"}), written out on
   // the next writable callback.
   bool json_reply;
   int json_status;
   char json_error[128];
-  char json_path[IMAGE_UPLOAD_PATH_MAX];
+  char json_path[FILE_UPLOAD_PATH_MAX];
   // Session token this response has to hand back in a Set-Cookie, empty when
   // there is nothing to send: the request either arrived with a cookie that is
   // still good for a while, or it is not authenticated at all.

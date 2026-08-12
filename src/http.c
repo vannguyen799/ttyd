@@ -13,9 +13,10 @@
 
 enum { AUTH_OK, AUTH_FAIL, AUTH_ERROR };
 
-// Cap on an accepted paste. Screenshots are far below this; the limit exists
-// because the handler sits on the same port as the terminal.
-#define MAX_IMAGE_BYTES (12 * 1024 * 1024)
+// Cap on an accepted paste or drop. Screenshots and documents are far below
+// this; the limit exists because the body is buffered whole in memory and the
+// handler sits on the same port as the terminal.
+#define MAX_UPLOAD_BYTES (32 * 1024 * 1024)
 
 // Cap on a stored tab layout. A few hundred tabs still fit comfortably; the
 // point is that an unauthenticated-looking POST can't grow a file forever.
@@ -86,17 +87,17 @@ static void json_result(struct pss_http *pss, int status, const char *path, cons
   lws_callback_on_writable(pss->wsi);
 }
 
-static void image_upload_done(void *ctx, int status, const char *path, const char *error) {
+static void file_upload_done(void *ctx, int status, const char *path, const char *error) {
   struct pss_http *pss = (struct pss_http *)ctx;
 
-  pss->image_upload = NULL;
+  pss->upload = NULL;
   json_result(pss, status == 0 ? HTTP_STATUS_OK : HTTP_STATUS_INTERNAL_SERVER_ERROR, path, error);
 }
 
 static void request_reset(struct pss_http *pss) {
-  if (pss->image_upload != NULL) {
-    image_upload_detach(pss->image_upload);
-    pss->image_upload = NULL;
+  if (pss->upload != NULL) {
+    file_upload_detach(pss->upload);
+    pss->upload = NULL;
   }
   free(pss->body);
   pss->body = NULL;
@@ -104,6 +105,7 @@ static void request_reset(struct pss_http *pss) {
   pss->body_max = 0;
   pss->body_too_large = false;
   pss->post = POST_NONE;
+  pss->upload_name[0] = '\0';
   pss->json_reply = false;
   pss->json_path[0] = '\0';
   pss->json_error[0] = '\0';
@@ -489,6 +491,41 @@ static void tabs_store(struct pss_http *pss) {
   json_result(pss, HTTP_STATUS_OK, NULL, NULL);
 }
 
+static int hex_value(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// Pick up the filename the browser attached to an upload. An HTTP header may
+// only carry ASCII while a filename may be anything, so the UI sends it
+// percent-encoded (encodeURIComponent). Decoding it here just gets the bytes
+// back; what is actually safe to put on disk is decided by the sanitiser in
+// file_upload.c, so a hostile name is harmless either way.
+static void read_upload_name(struct lws *wsi, struct pss_http *pss) {
+  char raw[512];
+  int len = lws_hdr_custom_copy(wsi, raw, sizeof(raw), "x-ttyd-filename:", 16);
+  if (len <= 0) return;
+
+  size_t out = 0;
+  for (int i = 0; i < len && out + 1 < sizeof(pss->upload_name); i++) {
+    char c = raw[i];
+    if (c == '%' && i + 2 < len) {
+      int hi = hex_value(raw[i + 1]), lo = hex_value(raw[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        c = (char)((hi << 4) | lo);
+        i += 2;
+      }
+    }
+    // A NUL would truncate the name for every later reader; drop it and let
+    // the sanitiser see the rest.
+    if (c == '\0') continue;
+    pss->upload_name[out++] = c;
+  }
+  pss->upload_name[out] = '\0';
+}
+
 static void access_log(struct lws *wsi, const char *path) {
   char rip[50];
 
@@ -539,18 +576,21 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         break;
       }
 
-      // Image paste bridge. The browser stores the image on the ttyd host.
-      // The UI then pastes the returned path into the foreground agent using
-      // its documented local-file syntax; no host clipboard is involved.
+      // File paste/drop bridge. The browser stores a pasted or dropped file on
+      // the ttyd host. The UI then pastes the returned path into the
+      // foreground agent using its documented local-file syntax; no host
+      // clipboard is involved. The path is still `/image-upload` because
+      // browser tabs loaded before this became general still post to it.
       if (strcmp(pss->path, endpoints.image) == 0) {
         if (lws_hdr_total_length(wsi, WSI_TOKEN_POST_URI) == 0) {
           lws_return_http_status(wsi, HTTP_STATUS_METHOD_NOT_ALLOWED, NULL);
           goto try_to_reuse;
         }
         // Answer from LWS_CALLBACK_HTTP_BODY_COMPLETION once the worker has
-        // durably stored the image.
-        pss->post = POST_IMAGE;
-        pss->body_max = MAX_IMAGE_BYTES;
+        // durably stored the file.
+        read_upload_name(wsi, pss);
+        pss->post = POST_FILE;
+        pss->body_max = MAX_UPLOAD_BYTES;
         return 0;
       }
 
@@ -684,22 +724,17 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       } else if (pss->post == POST_TABS) {
         tabs_store(pss);
       } else {
-        static const unsigned char png_signature[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
-        if (pss->body_len < sizeof(png_signature) ||
-            memcmp(pss->body, png_signature, sizeof(png_signature)) != 0) {
-          json_result(pss, HTTP_STATUS_BAD_REQUEST, NULL, "body is not a PNG image");
-          return 0;
-        }
-
+        // The bytes are not inspected: anything the user can paste or drop is
+        // something they could already have written from the shell on the
+        // other side of this same authenticated connection.
         int err = 0;
         char *data = pss->body;
         size_t data_len = pss->body_len;
-        pss->body = NULL;  // ownership passes to the image worker
+        pss->body = NULL;  // ownership passes to the upload worker
         pss->body_len = 0;
 
-        pss->image_upload = image_upload_store(server->loop, data, data_len, image_upload_done, pss, &err);
-        if (pss->image_upload == NULL)
-          json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL, uv_strerror(err));
+        pss->upload = file_upload_store(server->loop, data, data_len, pss->upload_name, file_upload_done, pss, &err);
+        if (pss->upload == NULL) json_result(pss, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL, uv_strerror(err));
       }
       return 0;
 
