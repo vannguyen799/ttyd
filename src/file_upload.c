@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "compat.h"
 #include "utils.h"
 
 #define FILE_UPLOAD_PREFIX "ttyd-upload-"
@@ -117,14 +118,11 @@ static bool name_is_image(const char *name) {
   if (ext == NULL) return false;
   ext++;
 
-  char lower[8];
-  size_t len = strlen(ext);
-  if (len == 0 || len >= sizeof(lower)) return false;
-  for (size_t i = 0; i <= len; i++) lower[i] = (char)tolower((unsigned char)ext[i]);
-
+  // Compare in place rather than lower-casing into a fixed buffer: no length
+  // cap to keep in sync with the longest entry, and nothing to overflow.
   static const char *image_ext[] = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"};
   for (size_t i = 0; i < sizeof(image_ext) / sizeof(image_ext[0]); i++)
-    if (strcmp(lower, image_ext[i]) == 0) return true;
+    if (strcasecmp(ext, image_ext[i]) == 0) return true;
   return false;
 }
 
