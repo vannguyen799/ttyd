@@ -150,8 +150,8 @@ new CLI version, update `project(ttyd VERSION ...)` in `CMakeLists.txt`, then pu
 `vMAJOR.MINOR.PATCH` tag. For example:
 
 ```bash
-git tag v1.8.0
-git push origin v1.8.0
+git tag v1.9.0
+git push origin v1.9.0
 ```
 
 The public installer starts working after that tag's release workflow completes. Releases are not
