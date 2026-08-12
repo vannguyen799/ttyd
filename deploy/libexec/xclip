@@ -48,7 +48,11 @@ pointer="$temp_dir/ttyd-image-current-$(id -u)"
 [ -f "$pointer" ] && [ -O "$pointer" ] || exit 1
 
 IFS= read -r image_path < "$pointer" || exit 1
+# ttyd-upload-* is the current prefix; ttyd-image-paste-* is what a pointer
+# written before the bridge accepted arbitrary files still names. Only images
+# ever claim this pointer, so either prefix is safe to serve as image/png.
 case "$image_path" in
+    "$temp_dir"/ttyd-upload-*) ;;
     "$temp_dir"/ttyd-image-paste-*) ;;
     *) exit 1 ;;
 esac
