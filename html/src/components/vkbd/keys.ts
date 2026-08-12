@@ -96,7 +96,7 @@ export const GROUPS: KeyGroup[] = [
                     { label: 'Select', sub: 'tap×2', action: { type: 'selectmode' }, class: 'mod' },
                     { label: 'Copy', sub: '^⇧C', action: { type: 'copy' } },
                     { label: 'Paste', sub: '^⇧V', action: { type: 'paste' } },
-                    { label: '🖼', sub: 'image', action: { type: 'pasteimage' } },
+                    { label: '📎', sub: 'file', action: { type: 'pasteimage' } },
                     { label: 'F1', action: { type: 'named', key: 'f1' } },
                     { label: 'F2', action: { type: 'named', key: 'f2' } },
                 ],

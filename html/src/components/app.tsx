@@ -29,7 +29,9 @@ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const path = window.location.pathname.replace(/[/]+$/, '');
 const wsUrlFor = (search: string) => [protocol, '//', window.location.host, path, '/ws', search].join('');
 const tokenUrl = [window.location.protocol, '//', window.location.host, path, '/token'].join('');
-const imageUploadUrl = [window.location.protocol, '//', window.location.host, path, '/image-upload'].join('');
+// The endpoint is still named for images: browser tabs loaded before it
+// accepted arbitrary files post to this path, and the server answers both.
+const fileUploadUrl = [window.location.protocol, '//', window.location.host, path, '/image-upload'].join('');
 const isMobile = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
 const savedVkbd = loadSettings();
 const clientOptions = {
@@ -447,7 +449,7 @@ export class App extends Component<Record<string, never>, AppState> {
                                     active={t.id === activeId}
                                     wsUrl={wsUrlFor(t.search)}
                                     tokenUrl={tokenUrl}
-                                    imageUploadUrl={imageUploadUrl}
+                                    fileUploadUrl={fileUploadUrl}
                                     clientOptions={clientOptions}
                                     termOptions={termOptions}
                                     flowControl={flowControl}

@@ -31,6 +31,8 @@ export interface TtydBridge {
     scrollPages: (n: number) => void;
     scrollToBottom: () => void;
     paste: () => Promise<void>;
+    pasteFiles: (files: (File | Blob)[]) => Promise<void>;
+    // Kept for anything holding a reference to the single-image API.
     pasteImage: (file: Blob) => Promise<void>;
     copySelection: () => Promise<void>;
     setSelectMode: (on: boolean) => void;
@@ -42,6 +44,29 @@ export interface TtydBridge {
 // costs no fidelity and keeps a phone-camera paste from shipping 8 MB over a
 // mobile link.
 const MAX_IMAGE_DIM = 1568;
+
+// Mirrors MAX_UPLOAD_BYTES in src/http.c. Known here only so an oversized file
+// fails immediately with a clear message instead of after a 32 MB round trip,
+// and so an oversized *image* can be downscaled instead of rejected.
+const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
+
+// Enough of an extension for the common things that arrive from a clipboard
+// with no filename at all. Anything else lands as .bin, which still opens —
+// the path is what the agent needs, the extension is a courtesy.
+const EXT_BY_TYPE: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'application/pdf': 'pdf',
+    'application/json': 'json',
+    'application/zip': 'zip',
+    'text/plain': 'txt',
+    'text/csv': 'csv',
+    'text/html': 'html',
+    'text/markdown': 'md',
+};
 
 // ClipboardAddon 0.1.0 ships typings that disagree with its build: the .d.ts
 // declares `constructor(provider?)` while the shipped JS is
@@ -137,7 +162,7 @@ export interface FlowControl {
 export interface XtermOptions {
     wsUrl: string;
     tokenUrl: string;
-    imageUploadUrl: string;
+    fileUploadUrl: string;
     flowControl: FlowControl;
     clientOptions: ClientOptions;
     termOptions: ITerminalOptions;
@@ -203,6 +228,7 @@ export class Xterm {
     private doReconnect = true;
     private closeOnDisconnect = false;
     private reconnecting = false;
+    private trzszEnabled = false;
     private autoReconnectSetup = false;
     private resumeDisposables: IDisposable[] = [];
     private pendingReconnectKey?: IDisposable;
@@ -642,7 +668,7 @@ export class Xterm {
         this.zmodemAddon?.sendFile(files);
     }
 
-    private imagePasteTarget(): 'claude' | 'path' {
+    private pasteTarget(): 'claude' | 'path' {
         // Prefer the live process title. A saved tab can say `claude` while
         // its existing tmux session is now running Codex (or vice versa), so
         // the URL is only a startup fallback before the first OSC title.
@@ -663,39 +689,110 @@ export class Xterm {
         return 'path';
     }
 
-    // Paste an image into whichever supported agent is in the foreground. The
-    // server stores it as a private temporary PNG. Codex recognizes an
-    // explicitly pasted image path as an attachment; Claude's documented
-    // @file syntax adds the same file to its context. Both travel as ordinary
-    // terminal input, so this path never needs a host clipboard or X11.
+    // Name an upload that arrived without one — a screenshot straight off the
+    // clipboard, mainly, where the browser hands over bare bytes.
+    private nameForBlob(blob: Blob, index: number): string {
+        const subtype = blob.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') ?? '';
+        const ext = EXT_BY_TYPE[blob.type] ?? (subtype && subtype.length <= 5 ? subtype : 'bin');
+        const stem = blob.type.startsWith('image/') ? 'pasted-image' : 'pasted-file';
+        return index === 0 ? `${stem}.${ext}` : `${stem}-${index + 1}.${ext}`;
+    }
+
+    // Decide what bytes to send and under what name.
+    //
+    // A real file travels untouched: an agent told to read `report.pdf` has to
+    // get the same bytes the user has locally, and re-encoding a dropped photo
+    // would hand it a different file than the one it was shown. Only a
+    // nameless clipboard bitmap is normalised to PNG — that is the screenshot
+    // case the bridge started life handling, and there is no original file to
+    // be faithful to.
+    private async prepareUpload(item: File | Blob, index: number): Promise<{ blob: Blob; name: string }> {
+        const named = item instanceof File && item.name ? item.name : '';
+        const isImage = item.type.startsWith('image/');
+        const tooBig = (size: number) => `too large (${Math.round(size / 1048576)} MB, limit 32 MB)`;
+
+        if (!named) {
+            const blob = isImage ? await toPngBlob(item) : item;
+            if (blob.size > MAX_UPLOAD_BYTES) throw new Error(tooBig(blob.size));
+            return { blob, name: this.nameForBlob(blob, index) };
+        }
+
+        if (item.size > MAX_UPLOAD_BYTES) {
+            // A phone photo is routinely over the cap and is exactly what the
+            // downscale path exists for; anything else the user has to shrink
+            // themselves, so say so instead of failing at the server.
+            if (!isImage) throw new Error(`${named} ${tooBig(item.size)}`);
+            const blob = await toPngBlob(item);
+            if (blob.size > MAX_UPLOAD_BYTES) throw new Error(`${named} ${tooBig(blob.size)}`);
+            return { blob, name: `${named.replace(/\.[^.]*$/, '') || 'image'}.png` };
+        }
+
+        return { blob: item, name: named };
+    }
+
+    private async uploadOne(blob: Blob, name: string): Promise<string> {
+        const resp = await fetch(this.options.fileUploadUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': blob.type || 'application/octet-stream',
+                // A header may only carry ASCII; the server percent-decodes and
+                // sanitises this before anything reaches the filesystem.
+                'X-Ttyd-Filename': encodeURIComponent(name),
+                // Same credential the WS handshake uses — ttyd's /token
+                // returns base64("user:pass"); see refreshToken() above.
+                ...(this.token ? { Authorization: `Basic ${this.token}` } : {}),
+            },
+            body: blob,
+        });
+        const detail = (await resp.json().catch(() => ({}))) as { error?: string; path?: string };
+        if (!resp.ok) throw new Error(detail.error || `HTTP ${resp.status}`);
+        if (!detail.path) throw new Error('upload returned no path');
+        return detail.path;
+    }
+
+    // Paste files into whichever supported agent is in the foreground. The
+    // server stores each one as a private temporary file under the user's
+    // account. Codex recognizes an explicitly pasted path as an attachment;
+    // Claude's documented @file syntax adds the same file to its context. Both
+    // travel as ordinary terminal input, so this path never needs a host
+    // clipboard or X11.
+    @bind
+    public async pasteFiles(items: (File | Blob)[]) {
+        const { overlayAddon } = this;
+        if (items.length === 0) return;
+
+        const short = (name: string) => (name.length > 24 ? `${name.slice(0, 21)}…` : name);
+        const paths: string[] = [];
+        try {
+            for (let i = 0; i < items.length; i++) {
+                const { blob, name } = await this.prepareUpload(items[i], i);
+                const label = items.length > 1 ? `📎 ${i + 1}/${items.length} ${short(name)}` : `📎 ${short(name)}`;
+                // Uploads run one at a time: the progress count stays honest,
+                // and a multi-file drop can't put several tens of megabytes
+                // in flight at once against a single-threaded server.
+                overlayAddon?.showOverlay(label, 30000);
+                paths.push(await this.uploadOne(blob, name));
+            }
+        } catch (e) {
+            console.warn('[ttyd] upload failed', e);
+            overlayAddon?.showOverlay(`📎 ${(e as Error).message}`, 3000);
+        }
+        // Whatever made it through is still worth pasting — a failure on file
+        // three shouldn't discard the first two.
+        if (paths.length === 0) return;
+
+        const prefix = this.pasteTarget() === 'claude' ? '@' : '';
+        const reference = paths.map(p => prefix + p).join(' ');
+        // Trailing space so the agent treats the last path as finished and the
+        // user can keep typing straight away.
+        this.sendData(`\x1b[200~${reference} \x1b[201~`);
+        if (paths.length === items.length)
+            overlayAddon?.showOverlay(`📎 ${paths.length} file${paths.length > 1 ? 's' : ''}`, 600);
+    }
+
     @bind
     public async pasteImage(src: Blob) {
-        const { overlayAddon } = this;
-        try {
-            overlayAddon?.showOverlay('🖼 …', 2000);
-            const png = await toPngBlob(src);
-            const resp = await fetch(this.options.imageUploadUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'image/png',
-                    // Same credential the WS handshake uses — ttyd's /token
-                    // returns base64("user:pass"); see refreshToken() above.
-                    ...(this.token ? { Authorization: `Basic ${this.token}` } : {}),
-                },
-                body: png,
-            });
-            const detail = (await resp.json().catch(() => ({}))) as { error?: string; path?: string };
-            if (!resp.ok) {
-                throw new Error(detail.error || `HTTP ${resp.status}`);
-            }
-            if (!detail.path) throw new Error('upload returned no image path');
-            const reference = this.imagePasteTarget() === 'claude' ? `@${detail.path}` : detail.path;
-            this.sendData(`\x1b[200~${reference}\x1b[201~`);
-            overlayAddon?.showOverlay('🖼 pasted', 600);
-        } catch (e) {
-            console.warn('[ttyd] image paste failed', e);
-            overlayAddon?.showOverlay(`🖼 ${(e as Error).message}`, 2500);
-        }
+        await this.pasteFiles([src]);
     }
 
     @bind
@@ -932,57 +1029,115 @@ export class Xterm {
             );
         };
 
-        // Image paste and drag-drop.
+        // File paste and drag-drop.
         //
         // Reads ClipboardEvent.clipboardData rather than navigator.clipboard
         // .read(): the async Clipboard API requires a secure context, and this
         // UI is routinely served over plain HTTP on a LAN IP, where it simply
         // isn't available. The paste event carries the same bytes with no
         // permission prompt, and also covers mobile long-press-paste.
-        const imageFrom = (dt: DataTransfer | null | undefined): File | null => {
+        const filesFrom = (dt: DataTransfer | null | undefined): File[] => {
+            const files: File[] = [];
             for (const item of Array.from(dt?.items ?? [])) {
-                if (item.kind === 'file' && item.type.startsWith('image/')) {
-                    const file = item.getAsFile();
-                    if (file) return file;
-                }
+                if (item.kind !== 'file') continue;
+                const file = item.getAsFile();
+                if (file) files.push(file);
             }
-            return null;
+            // Fallback for browsers that populate .files but not .items on a
+            // paste (older Safari).
+            if (files.length === 0) files.push(...Array.from(dt?.files ?? []));
+            return files;
         };
+        const hasFiles = (dt: DataTransfer | null | undefined): boolean =>
+            !!dt && (Array.from(dt.types ?? []).includes('Files') || dt.files?.length > 0);
+        // trzsz, when the deployment turns it on, installs its own drop
+        // handler on the terminal element and forwards dropped files to `trz`
+        // on the *remote* side. That is a different destination the operator
+        // asked for explicitly, so it keeps drops; uploading to the host is
+        // the behaviour everywhere else (trzsz is off by default).
+        const dropHandledHere = () => this.isActive() && !this.trzszEnabled;
+
+        // A drag with no feedback is indistinguishable from a drag the page
+        // will refuse, so say plainly that dropping here uploads. dragleave
+        // fires on every element boundary crossed, hence the depth counter
+        // rather than a boolean.
+        let dragDepth = 0;
+        let dropHint: HTMLElement | null = null;
+        const showDropHint = () => {
+            if (dropHint || !dropHandledHere()) return;
+            dropHint = document.createElement('div');
+            dropHint.textContent = 'Drop to upload to this host';
+            dropHint.style.cssText = `position:fixed;inset:0;z-index:2147483646;display:flex;
+align-items:center;justify-content:center;pointer-events:none;font:600 1.25rem/1.4 system-ui,sans-serif;
+color:#f0f0f0;background:rgba(16,16,16,0.55);border:3px dashed rgba(240,240,240,0.7);box-sizing:border-box;`;
+            document.body.appendChild(dropHint);
+        };
+        const hideDropHint = () => {
+            dragDepth = 0;
+            dropHint?.remove();
+            dropHint = null;
+        };
+
         // These listeners live on `document`, so with several tabs mounted at
         // once every terminal would otherwise react to the same paste/drop.
         // Only the active tab (the one owning window.term) should consume it.
         const onPaste = (e: ClipboardEvent) => {
             if (!this.isActive()) return;
-            const img = imageFrom(e.clipboardData);
-            if (!img) return; // text paste — leave xterm's own handling alone
+            const files = filesFrom(e.clipboardData);
+            if (files.length === 0) return; // text paste — leave xterm's own handling alone
             e.preventDefault();
-            void this.pasteImage(img);
+            void this.pasteFiles(files);
         };
+        // Capture phase, and propagation stopped once taken: the drop must not
+        // also reach the trzsz listener on the terminal element below.
         const onDrop = (e: DragEvent) => {
-            if (!this.isActive()) return;
-            const img = imageFrom(e.dataTransfer);
-            if (!img) return;
+            hideDropHint();
+            if (!dropHandledHere()) return;
+            const files = filesFrom(e.dataTransfer);
+            if (files.length === 0) return;
             e.preventDefault();
-            void this.pasteImage(img);
+            e.stopPropagation();
+            void this.pasteFiles(files);
         };
         // Without cancelling dragover the browser navigates away to the file.
         const onDragOver = (e: DragEvent) => {
-            if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+            if (!hasFiles(e.dataTransfer)) return;
+            e.preventDefault();
+            if (!dropHandledHere()) return;
+            e.stopPropagation();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
         };
+
+        const onDragEnter = (e: DragEvent) => {
+            if (!hasFiles(e.dataTransfer)) return;
+            dragDepth++;
+            showDropHint();
+        };
+        const onDragLeave = (e: DragEvent) => {
+            if (!hasFiles(e.dataTransfer)) return;
+            if (--dragDepth <= 0) hideDropHint();
+        };
+
         document.addEventListener('paste', onPaste);
-        document.addEventListener('drop', onDrop);
-        document.addEventListener('dragover', onDragOver);
+        document.addEventListener('drop', onDrop, true);
+        document.addEventListener('dragover', onDragOver, true);
+        document.addEventListener('dragenter', onDragEnter, true);
+        document.addEventListener('dragleave', onDragLeave, true);
         this.register({
             dispose: () => {
+                hideDropHint();
                 document.removeEventListener('paste', onPaste);
-                document.removeEventListener('drop', onDrop);
-                document.removeEventListener('dragover', onDragOver);
+                document.removeEventListener('drop', onDrop, true);
+                document.removeEventListener('dragover', onDragOver, true);
+                document.removeEventListener('dragenter', onDragEnter, true);
+                document.removeEventListener('dragleave', onDragLeave, true);
             },
         });
 
         const prevHook = window.ttyd?.vkbdHook;
         this.bridge = {
             sendBytes: data => this.sendData(data),
+            pasteFiles: files => this.pasteFiles(files),
             pasteImage: blob => this.pasteImage(blob),
             scrollLines: n => dispatchWheel(n * getRowHeight()),
             scrollPages: n => {
@@ -1330,6 +1485,9 @@ export class Xterm {
     @bind
     private applyPreferences(prefs: Preferences) {
         const { terminal, register } = this;
+        // Remembered because trzsz installs its own drop handler on the
+        // terminal element; see the drop listener in open().
+        this.trzszEnabled = !!prefs.enableTrzsz;
         if (prefs.enableZmodem || prefs.enableTrzsz) {
             this.zmodemAddon = new ZmodemAddon({
                 zmodem: prefs.enableZmodem,

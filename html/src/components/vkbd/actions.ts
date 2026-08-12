@@ -133,20 +133,22 @@ export interface Dispatcher {
 // The input is mounted rather than detached because iOS Safari ignores
 // click() on a node that isn't in the document, and it's kept visible-but-
 // transparent because `display: none` suppresses the tap there as well.
-function pickImage(): Promise<File | null> {
+// No `accept` filter: a phone's picker narrows to the photo roll when it sees
+// image/*, which is exactly the wrong default now that any file can be sent.
+function pickFiles(): Promise<File[]> {
     return new Promise(resolve => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'image/*';
+        input.multiple = true;
         input.style.cssText = 'position:fixed;left:-9999px;opacity:0;';
-        const done = (file: File | null) => {
+        const done = (files: File[]) => {
             input.remove();
-            resolve(file);
+            resolve(files);
         };
-        input.addEventListener('change', () => done(input.files?.[0] ?? null));
+        input.addEventListener('change', () => done(Array.from(input.files ?? [])));
         // Not supported everywhere; without it a dismissed picker leaves the
         // hidden input parked until the next pick.
-        (input as EventTarget).addEventListener('cancel', () => done(null));
+        (input as EventTarget).addEventListener('cancel', () => done([]));
         document.body.appendChild(input);
         input.click();
     });
@@ -189,12 +191,14 @@ export function dispatch(action: KeyAction, d: Dispatcher): boolean {
         case 'paste':
             void bridge.paste();
             return true;
+        // Action name kept from when this only handled images: saved keyboard
+        // layouts in localStorage still refer to it.
         case 'pasteimage':
-            pickImage()
-                .then(file => {
-                    if (file) void bridge.pasteImage(file);
+            pickFiles()
+                .then(files => {
+                    if (files.length) void bridge.pasteFiles(files);
                 })
-                .catch(e => console.warn('[ttyd] image pick failed', e));
+                .catch(e => console.warn('[ttyd] file pick failed', e));
             return true;
         case 'copy':
             void bridge.copySelection();
