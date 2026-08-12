@@ -1,6 +1,6 @@
 # ttyd - Web Terminal (Local)
 
-Lightweight web terminal accessible from any browser. **One process, one port** (`10090`): this fork's `ttyd` binary serves the custom virtual-keyboard (vkbd) UI, the terminal WebSocket and the image-paste endpoint itself. There is no proxy and no Node runtime in the deployment.
+Lightweight web terminal accessible from any browser. **One process, one port** (`10090`): this fork's `ttyd` binary serves the custom virtual-keyboard (vkbd) UI, the terminal WebSocket and the file-upload endpoint itself. There is no proxy and no Node runtime in the deployment.
 
 ## What is ttyd?
 
@@ -138,7 +138,7 @@ That renders `deploy/systemd/ttyd.service` for this host (user = whoever owns
 the checkout), seeds `/etc/default/ttyd` from
 `deploy/systemd/ttyd.env.example` with a generated password, then enables and
 starts it. The unit runs `start-ttyd.sh --foreground`, so the service and a
-manual start share one code path — same flags, same image bridge, same
+manual start share one code path — same flags, same upload bridge, same
 tmux persistence.
 
 ```bash
@@ -225,7 +225,7 @@ your tmux sessions — down, and removes their private launcher scripts.
 │   /                → vkbd UI (html.h)    │
 │   /ws              → PTY                 │
 │   /token           → basic-auth token    │
-│   /image-upload    → temp PNG (image_upload.c) │
+│   /image-upload    → temp file (file_upload.c) │
 │   /tabs            → tab layout store    │
 └────────┬─────────────────────────────────┘
          │
@@ -325,27 +325,41 @@ tmux source-file ~/.tmux.conf
 
 ---
 
-## Image Paste (screenshots into Claude Code and Codex)
+## File Paste & Drop (screenshots, PDFs, anything — into Claude Code and Codex)
 
-Paste or drag an image into the terminal and Claude Code or Codex receives it
-as a real `[Image #1]` attachment — without a desktop, host clipboard, or X
-server.
+Paste or drag **any file** into the terminal and Claude Code or Codex receives
+it as a real attachment — without a desktop, host clipboard, or X server. Drop
+several at once and every path is pasted together.
 
-The browser re-encodes the image as PNG and sends it to the authenticated
-`/image-upload` endpoint. ttyd writes it on libuv's worker pool to a private,
-randomly named file in the operating system's temporary directory and returns
-the absolute path. The UI sends that file reference as ordinary bracketed-paste
-terminal input, choosing the format from the live foreground-process title
-(with the tab URL used only before the first title arrives):
+The browser sends each file to the authenticated `/image-upload` endpoint. ttyd
+writes it on libuv's worker pool to a private, randomly named file in the
+operating system's temporary directory — keeping the original filename and
+extension as a suffix — and returns the absolute path. The UI sends those file
+references as ordinary bracketed-paste terminal input, choosing the format from
+the live foreground-process title (with the tab URL used only before the first
+title arrives):
 
-- **Codex** receives the returned path as a bracketed paste. Codex validates
-  explicitly pasted image paths and converts them into native attachments.
+- **Codex** receives the returned paths as a bracketed paste. Codex validates
+  explicitly pasted paths and converts them into native attachments.
 - **Claude Code** receives `@<absolute-path>` as a bracketed paste. `@file` is
-  Claude Code's documented file-reference syntax, so the PNG enters context
+  Claude Code's documented file-reference syntax, so the file enters context
   without invoking its clipboard action.
 
+Bytes travel untouched, so the agent reads exactly the file the user has —
+with one exception: a screenshot pasted straight from the clipboard has no
+filename and no original file to be faithful to, so it is re-encoded as PNG and
+capped at 1568px on the long edge (which is where Claude's vision pipeline
+downscales anyway) to keep mobile uploads small. An image *file* over the size
+cap gets the same treatment instead of being rejected.
+
+Filenames are sanitised server-side: the path component is dropped, anything
+outside `[A-Za-z0-9._-]` collapses to `_`, and the result is truncated with the
+extension preserved. So `../../My Report (v2).pdf` is stored as
+`…-My_Report_v2_.pdf` — no spaces or quoting to break the agent's path parser,
+and no way to escape the temp directory.
+
 ```
-Browser paste/drop ──POST /image-upload──▶ ttyd ──▶ /tmp/ttyd-image-paste-XXXXXX
+Browser paste/drop ──POST /image-upload──▶ ttyd ──▶ /tmp/ttyd-upload-XXXXXX-report.pdf
                                                     │
                          ┌──────────────────────────┴──────────────────────┐
                          │                                                 │
@@ -353,7 +367,7 @@ Browser paste/drop ──POST /image-upload──▶ ttyd ──▶ /tmp/ttyd-im
                          │                                                 │
                          └──────────────────────────┬──────────────────────┘
                                                     ▼
-                                             image context
+                                              agent context
 ```
 
 The physical Ctrl+V key is suppressed while the browser paste event runs; only
@@ -364,7 +378,7 @@ requirement in the primary path.
 Use `?arg=codex&arg=<session>` or `?arg=claude&arg=<session>` when creating a
 new session. Existing sessions may switch agents: tmux publishes the actual
 foreground command in its title, and that live value takes priority over the
-saved URL when formatting an image reference.
+saved URL when formatting a file reference.
 
 For a smooth rolling upgrade, the deployment still includes a tiny X11-free
 `xclip` reader and publishes a per-user pointer for browser pages that loaded
@@ -375,19 +389,27 @@ file-reference path; new sessions and new clients do not depend on the helper.
 
 | Where | Gesture |
 |---|---|
-| Desktop | Ctrl/Cmd+V, or drag an image file onto the terminal |
-| Mobile | the **🖼** key in the vkbd `readline` group (opens gallery/camera) |
+| Desktop | Ctrl/Cmd+V, or drag one or more files onto the terminal |
+| Mobile | the **📎** key in the vkbd `readline` group (opens the file/photo picker) |
 
-Images are re-encoded to PNG in the browser and capped at 1568px on the long
-edge to keep mobile uploads small.
+Copying a file in the OS file manager and pressing Ctrl+V works the same way as
+dropping it. A plain text paste is still a plain text paste — the upload path
+only engages when the clipboard or drag actually carries files.
+
+Where the deployment enables trzsz, drops keep going to `trz` on the remote
+side as before; trzsz is off by default, so uploading to the ttyd host is the
+default behaviour.
 
 **Security**: `/image-upload` is gated by the same credential as the
 terminal — ttyd's `/token` hands the browser `base64("user:pass")` and the
-client replays it in an `Authorization: Basic` header. Bodies over 12 MB are
-rejected and non-PNG bodies are refused. Temporary files use the platform's
-secure temp-file primitive and stale ttyd image uploads are removed after 24
-hours when the next image is stored. The legacy-client compatibility pointer
-is per-user, atomically replaced, and readable only by that user.
+client replays it in an `Authorization: Basic` header. Bodies over 32 MB are
+rejected. The bytes themselves are not inspected: anything that can be uploaded
+here could already have been written from the shell on the other side of the
+same authenticated connection. Temporary files use the platform's secure
+temp-file primitive (`0600`, owner-only) and stale uploads are removed after 24
+hours when the next one is stored. The legacy-client compatibility pointer is
+per-user, atomically replaced, readable only by that user, and only ever points
+at an image.
 
 ---
 

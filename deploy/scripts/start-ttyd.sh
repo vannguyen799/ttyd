@@ -187,7 +187,7 @@ echo ""
 #
 # It must be THIS fork's build, not a distro/nix ttyd: the vkbd UI, the tab
 # bar and the /image-upload endpoint all live in the binary now. Stock ttyd
-# would come up serving its own default UI and image paste would 404, which is
+# would come up serving its own default UI and file paste would 404, which is
 # a confusing way to fail — so build from the checkout rather than fall back.
 #
 # Rebuild only when the binary is missing or older than a source file, so a
@@ -510,6 +510,6 @@ if ! kill -0 $(cat $PIDFILE_TTYD) 2>/dev/null; then
     echo -e "${RED}Error: ttyd failed to start${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ ttyd started ($BIND:$PORT) — UI, WebSocket and image paste all in one process${NC}"
+echo -e "${GREEN}✓ ttyd started ($BIND:$PORT) — UI, WebSocket and file paste all in one process${NC}"
 
 print_banner

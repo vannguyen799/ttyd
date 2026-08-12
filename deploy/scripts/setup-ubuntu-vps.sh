@@ -32,7 +32,7 @@ REPO_URL_DEFAULT="https://github.com/vannguyen799/ttyd-pro.git"
 TTYD_DIR_DEFAULT="$HOME/ttyd"
 
 # The one public port: this ttyd serves the vkbd UI, the WebSocket and the
-# image-paste endpoint itself, so there is nothing else to expose.
+# file-upload endpoint itself, so there is nothing else to expose.
 PORT=10090
 USERNAME="user"
 PASSWORD=""

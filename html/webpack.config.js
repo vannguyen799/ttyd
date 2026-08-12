@@ -103,8 +103,8 @@ const devConfig = {
             },
         },
         // Everything that isn't the bundle goes to the real ttyd, including
-        // /image-upload — the image-paste bridge lives in the binary
-        // (src/image_upload.c), so dev mode exercises the same code production
+        // /image-upload — the file-upload bridge lives in the binary
+        // (src/file_upload.c), so dev mode exercises the same code production
         // does instead of a second, drifting implementation.
         proxy: [
             {

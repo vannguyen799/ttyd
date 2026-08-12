@@ -13,8 +13,9 @@ deploy kit:
   and per-tab sleep/wake with auto-reconnect on mobile.
 - 📋 **Copy & paste that actually works on mobile** — OSC 52 → `execCommand` → tap-to-copy sheet
   fallback for plain-HTTP origins, touch select-mode, and a floating copy tooltip.
-- 🖼 **Image paste into Claude Code and Codex** — paste or drag a screenshot and it is uploaded to
-  a private temporary file, then referenced directly in the agent; no desktop, clipboard, or X server required.
+- 📎 **File paste & drop into Claude Code and Codex** — paste a screenshot, or drag in PDFs, CSVs,
+  archives, several at once: each lands in a private temporary file keeping its name and extension,
+  and every path is referenced directly in the agent; no desktop, clipboard, or X server required.
 - 🔀 **URL-based session routing** — `?arg=work`, `?arg=claude&arg=dev`, `cwd:` modifiers, etc.,
   auto-attach to named `tmux`/`screen` sessions.
 - 💾 **Sessions that survive a reboot** — tmux window/pane layout is saved and restored, the tab
@@ -36,10 +37,10 @@ deploy kit:
 | Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, new tabs inherit the active tab's `cwd:`, per-tab sleep/wake, server-side tab layout shared across devices (`--tabs-file`) |
 | Mobile | Auto-reconnect on tab re-activation, client-side auth-token persistence, no leave-site alert (tmux persists) |
 | Auth | One password prompt per 30 days instead of one per browser restart — a successful login gets a `HttpOnly` session cookie that survives a ttyd restart (`--auth-max-age`, `--session-file`) |
-| Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, Claude/Codex image paste-in |
+| Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, Claude/Codex file paste-in (any type, multi-file, drag & drop) |
 | tmux | Mouse-driven pane switching, drag-to-copy, wheel/prefix scroll into copy-mode, buffer→clipboard keys |
 | Persistence | Pane layout restored after a reboot (resurrect/continuum, installed automatically), agent panes resumed into their own `claude`/`codex` session |
-| Deploy | One-command start of backend + UI, headless image-upload bridge, VPS bootstrap |
+| Deploy | One-command start of backend + UI, headless file-upload bridge, VPS bootstrap |
 
 The `deploy/` directory has its own [README](deploy/README.md) covering the runtime architecture,
 clipboard internals, session routing, and persistence in depth.
@@ -106,7 +107,7 @@ stopped before a changed binary can be installed. Use `--disable-auto-update` (o
 # Deploy quick start
 
 For a source checkout or a managed VPS service, use the deploy kit. One process serves everything
-— the vkbd UI, the terminal WebSocket and image paste:
+— the vkbd UI, the terminal WebSocket and file paste:
 
 ```bash
 bash deploy/scripts/start-ttyd.sh
@@ -128,7 +129,7 @@ bash deploy/scripts/start-ttyd.sh
 
 Port **10090** is the only one to expose or tunnel; pass `-b 127.0.0.1` to keep ttyd local and put
 a tunnel or reverse proxy in front. See [deploy/README.md](deploy/README.md) for options, session
-routing, image paste, and persistence.
+routing, file paste, and persistence.
 
 To have it come back on boot, install the systemd unit — it runs the same script in the foreground,
 and restarts leave live tmux sessions untouched:

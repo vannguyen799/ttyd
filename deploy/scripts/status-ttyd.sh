@@ -14,7 +14,7 @@ echo -e "${CYAN}  Web Terminal Status${NC}"
 echo -e "${CYAN}══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-# ttyd — the single public process: UI, WebSocket and image paste in one.
+# ttyd — the single public process: UI, WebSocket and file paste in one.
 if pgrep -f "ttyd -p" > /dev/null; then
     PORT=$(pgrep -af "ttyd -p" | grep -oE '\-p [0-9]+' | awk '{print $2}' | head -1)
     BIND=$(pgrep -af "ttyd -p" | grep -oE '\-i [^ ]+' | awk '{print $2}' | head -1)
@@ -38,12 +38,12 @@ else
     echo -e "  ttyd:        ${RED}Stopped${NC}"
 fi
 
-# Image paste is handled by ttyd's authenticated upload endpoint; it needs no
+# File paste is handled by ttyd's authenticated upload endpoint; it needs no
 # sidecar process and is available whenever this fork's ttyd is running.
 if pgrep -f "ttyd -p" > /dev/null; then
-    echo -e "  Image paste: ${GREEN}Running${NC} (temporary-file bridge)"
+    echo -e "  File paste: ${GREEN}Running${NC} (temporary-file bridge)"
 else
-    echo -e "  Image paste: ${RED}Stopped${NC}"
+    echo -e "  File paste: ${RED}Stopped${NC}"
 fi
 
 # Dev server — not part of the deployment, but worth flagging when it is up.
