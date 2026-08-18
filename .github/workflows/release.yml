@@ -45,9 +45,13 @@ jobs:
           cp artifacts/ttyd.macos-aarch64/ttyd release/ttyd-pro-macos-aarch64
           cp artifacts/ttyd.msvc/ttyd.exe release/ttyd-pro-windows-x86_64.exe
           cp install.sh install.ps1 release/
-          chmod 0755 release/ttyd-pro-* release/install.sh
+          # The session wrapper ships as a release asset, not fetched from the
+          # default branch: the installer verifies it against SHA256SUMS, and a
+          # pinned --version must get the wrapper that release was tested with.
+          cp deploy/scripts/ttyd-session.sh release/
+          chmod 0755 release/ttyd-pro-* release/install.sh release/ttyd-session.sh
           cd release
-          sha256sum ttyd-pro-* install.sh install.ps1 > SHA256SUMS
+          sha256sum ttyd-pro-* install.sh install.ps1 ttyd-session.sh > SHA256SUMS
       - uses: ncipollo/release-action@v1
         with:
           artifacts: release/*

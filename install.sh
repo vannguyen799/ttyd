@@ -156,6 +156,37 @@ else
     log "Installed ttyd-pro to $INSTALL_DIR/ttyd-pro"
 fi
 
+# The session wrapper, next to the binary.
+#
+# Without it a deployment can only run a fixed child command, so every browser
+# tab lands in the same tmux session and `?arg=cwd:…&arg=name:…` has nowhere to
+# be interpreted — the routing the UI is built around simply does not happen.
+# Best-effort on purpose: a release published before the wrapper became an asset
+# still installs a working binary, and a plain terminal is a far better outcome
+# than a failed install.
+install_session_wrapper() {
+    WRAPPER="ttyd-session.sh"
+    curl --proto '=https' --tlsv1.2 -fL "$RELEASE_BASE/$WRAPPER" -o "$TMP_DIR/$WRAPPER" 2>/dev/null || {
+        log "Note: $WRAPPER is not published in this release; session routing stays unavailable."
+        return 0
+    }
+    WRAPPER_EXPECTED=$(awk -v name="$WRAPPER" '$2 == name || $2 == "*" name { print $1; exit }' "$TMP_DIR/SHA256SUMS")
+    if [ -n "$WRAPPER_EXPECTED" ]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            WRAPPER_ACTUAL=$(sha256sum "$TMP_DIR/$WRAPPER" | awk '{print $1}')
+        else
+            WRAPPER_ACTUAL=$(shasum -a 256 "$TMP_DIR/$WRAPPER" | awk '{print $1}')
+        fi
+        [ "$WRAPPER_ACTUAL" = "$WRAPPER_EXPECTED" ] || die "SHA-256 verification failed for $WRAPPER"
+    fi
+    WRAPPER_TMP="$INSTALL_DIR/.$WRAPPER.new.$$"
+    cp "$TMP_DIR/$WRAPPER" "$WRAPPER_TMP"
+    chmod 0755 "$WRAPPER_TMP"
+    mv -f "$WRAPPER_TMP" "$INSTALL_DIR/$WRAPPER"
+    log "Installed $WRAPPER to $INSTALL_DIR/$WRAPPER"
+}
+install_session_wrapper
+
 add_to_path() {
     case ":${PATH:-}:" in *":$INSTALL_DIR:"*) return ;; esac
     [ "$MODIFY_PATH" = true ] || {
