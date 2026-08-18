@@ -605,7 +605,7 @@ $chrome-opacity: var(--tabbar-opacity, 1);
         font-size: 13px;
     }
 }
-// Auto-hide + "only this session" toggle rows (in the options popover).
+// Auto-hide toggle row (in the options popover).
 .tabbar-toggle-row {
     margin-top: 6px;
 
@@ -623,19 +623,72 @@ $chrome-opacity: var(--tabbar-opacity, 1);
     &.active .tabbar-check {
         color: $accent;
     }
-    // The active namespace name shown next to "Only this session".
-    .tabbar-group-name {
-        flex: 0 1 auto;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        padding: 1px 6px;
-        background: rgba(255, 255, 255, 0.08);
-        border-radius: 6px;
-        color: $accent-line;
-        font-size: 11px;
-        font-variant-numeric: tabular-nums;
+}
+// ── "Other sessions" list (in the options popover) ──────────────────────
+// The strip only ever shows the namespace in view, so this is the way back to
+// a tab opened under another session name, and the way to discard one.
+.tabbar-group-list {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.tabbar-group-row {
+    padding: 2px 0;
+    gap: 2px;
+
+    &:hover {
+        background: transparent;
+    }
+}
+.tabbar-group-open {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: $text;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+.tabbar-group-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tabbar-group-count {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: $accent-line;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+.tabbar-group-close {
+    flex: 0 0 auto;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: $muted;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
     }
 }
 .tabbar-pop-add {

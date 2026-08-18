@@ -25,8 +25,8 @@ export interface TabInfo {
     search: string; // full WS query string incl. leading '?' (preserves routing)
     renamed?: boolean; // user renamed the tab — terminal title events no longer overwrite it
     group: string; // entry namespace: the session name the page was opened with when
-    // this cluster of tabs was spawned. Lets the bar scope the list to "just this
-    // session" vs "all sessions". An entry tab's group equals its own session.
+    // this cluster of tabs was spawned. The bar always scopes its list to the
+    // active tab's group. An entry tab's group equals its own session.
 }
 
 export interface BarState {
@@ -36,7 +36,6 @@ export interface BarState {
     opacity?: number; // opacity of the bar's chrome — chips/buttons (1 = default)
     colWidth?: number; // column width (px) in left/right mode, drag-resizable
     autoHide?: boolean; // hide the bar after a few idle seconds; reveal on edge-hover
-    showAllGroups?: boolean; // show every tab (all sessions) vs only the active tab's group
 }
 
 // Clamp for the drag-resizable column width (left/right mode). Wide enough to
@@ -72,7 +71,9 @@ export interface TabsState {
     seq?: Record<string, number>;
 }
 
-const STORE_KEY = 'ttyd.tabs.v1';
+// Exported so the app can tell its own storage writes from those of another
+// browser tab pointed at the same deployment (see the `storage` listener).
+export const STORE_KEY = 'ttyd.tabs.v1';
 
 function sanitizeName(raw: string): string {
     return (raw || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64);
@@ -234,10 +235,11 @@ export function makeTab(session: string, search: string, title?: string, group?:
     return { id: genTabId(), session, search, title: title || session, group: group || session };
 }
 
-// The tabs to show for the current view: everything when showAll, else only the
-// tabs belonging to `group` (the active tab's entry namespace).
-export function tabsInView(tabs: TabInfo[], group: string, showAll: boolean): TabInfo[] {
-    if (showAll) return tabs;
+// The tabs to show for the current view: only the ones belonging to `group`
+// (the active tab's entry namespace). The bar is always scoped this way —
+// tabs of other sessions are never listed, so a strip can't offer a chip that
+// jumps you out of the session you deep-linked into.
+export function tabsInView(tabs: TabInfo[], group: string): TabInfo[] {
     return tabs.filter(t => t.group === group);
 }
 
@@ -270,7 +272,6 @@ function defaultBar(): BarState {
         opacity: BAR_OPACITY_DEFAULT,
         colWidth: COL_WIDTH_DEFAULT,
         autoHide: true,
-        showAllGroups: false,
     };
 }
 
@@ -323,6 +324,14 @@ export function normalizeTabsState(saved: TabsState | null): TabsState {
         const existing = tabs.find(t => t.session === urlSession);
         if (existing) {
             activeId = existing.id;
+            // A reload keeps the URL it was opened with, so a deep-link would
+            // otherwise snap back to the entry tab every time — you would never
+            // be able to refresh while sitting on the third tab of a project.
+            // The hash wins as long as it points inside the namespace the link
+            // addresses; a link to a *different* session still moves you there.
+            const hashId = tabIdFromHash();
+            const hashTab = hashId ? tabs.find(t => t.id === hashId) : undefined;
+            if (hashTab && hashTab.group === existing.group) activeId = hashTab.id;
         } else {
             const t = makeTab(urlSession, urlSearch, urlSession);
             tabs.unshift(t);
@@ -342,9 +351,12 @@ export function normalizeTabsState(saved: TabsState | null): TabsState {
     return { tabs, activeId, bar, seq };
 }
 
-export function saveTabsState(state: TabsState): void {
+// `json` lets a caller that already serialised this exact state pass it in
+// rather than have it stringified a second time — every commit goes through
+// here, including the ones a drag-to-reorder fires per chip it crosses.
+export function saveTabsState(state: TabsState, json?: string): void {
     try {
-        localStorage.setItem(STORE_KEY, JSON.stringify(state));
+        localStorage.setItem(STORE_KEY, json ?? JSON.stringify(state));
     } catch {
         // storage full / disabled — non-fatal, tabs just won't persist.
     }

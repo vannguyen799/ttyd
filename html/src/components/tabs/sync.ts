@@ -19,7 +19,9 @@
 
 import { TabsState } from './model';
 
-const REV_KEY = 'ttyd.tabs.rev';
+// Exported so the app can recognise a write from another browser tab of the
+// same profile (see the `storage` listener in app.tsx).
+export const REV_KEY = 'ttyd.tabs.rev';
 const PUSH_DEBOUNCE_MS = 700;
 
 const path = window.location.pathname.replace(/[/]+$/, '');

@@ -8,6 +8,7 @@ import { TabBar } from './tabs/tabbar';
 import {
     BAR_OPACITY_DEFAULT,
     BarMode,
+    STORE_KEY,
     TabInfo,
     TabsState,
     allocSession,
@@ -20,7 +21,7 @@ import {
     spawnSearch,
     tabsInView,
 } from './tabs/model';
-import { fetchRemote, flushRemote, loadRev, nextRev, pushRemote, saveRev } from './tabs/sync';
+import { REV_KEY, fetchRemote, flushRemote, loadRev, nextRev, pushRemote, saveRev } from './tabs/sync';
 
 import type { ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { ClientOptions, FlowControl } from './terminal/xterm';
@@ -108,11 +109,15 @@ export class App extends Component<Record<string, never>, AppState> {
     // The durable layout as last written out, so publish() can tell a real edit
     // from a re-commit of the same thing.
     private published = '';
+    // Revision of the layout this page holds, so a write by another browser tab
+    // of the same profile can be told from our own.
+    private rev = 0;
 
     constructor() {
         super();
         const base = loadTabsState();
         this.published = JSON.stringify({ tabs: base.tabs, activeId: base.activeId, bar: base.bar, seq: base.seq });
+        this.rev = loadRev();
         // Only the active tab starts live; the rest wake lazily when visited.
         this.state = { ...base, live: [base.activeId] };
         // Publish before the first render so the vkbd's initial paint already
@@ -126,12 +131,14 @@ export class App extends Component<Record<string, never>, AppState> {
         // (another device moved on since this browser last looked), swap to it.
         void this.syncFromServer();
         window.addEventListener('pagehide', flushRemote);
+        window.addEventListener('storage', this.onStorage);
     }
 
     componentWillUnmount() {
         for (const h of this.sleepTimers.values()) window.clearTimeout(h);
         this.sleepTimers.clear();
         window.removeEventListener('pagehide', flushRemote);
+        window.removeEventListener('storage', this.onStorage);
         flushRemote();
     }
 
@@ -164,6 +171,7 @@ export class App extends Component<Record<string, never>, AppState> {
             if (extra.length) adopted.tabs = adopted.tabs.concat(extra);
         }
         saveRev(remote.rev);
+        this.rev = remote.rev;
         saveTabsState(adopted);
         this.published = JSON.stringify({
             tabs: adopted.tabs,
@@ -189,9 +197,39 @@ export class App extends Component<Record<string, never>, AppState> {
         const json = JSON.stringify(durable);
         if (!force && json === this.published) return;
         this.published = json;
-        saveTabsState(durable);
+        this.rev = rev;
+        saveTabsState(durable, json);
         saveRev(rev);
         pushRemote({ rev, state: durable });
+    }
+
+    // Another browser tab of this profile wrote the layout. Without this the two
+    // pages hold divergent lists and whichever is closed last silently wins —
+    // add a tab in one window, add one in the other, and the first is gone.
+    //
+    // Only the *list* is adopted: activeId and the live set stay ours, so a
+    // title change over in the other window can't yank this one to a different
+    // tab or tear down a terminal that is on screen.
+    @bind
+    private onStorage(e: StorageEvent) {
+        if (e.key !== null && e.key !== STORE_KEY && e.key !== REV_KEY) return;
+        const rev = loadRev();
+        if (rev <= this.rev) return;
+
+        const adopted = loadTabsState();
+        const activeId = adopted.tabs.some(t => t.id === this.state.activeId) ? this.state.activeId : adopted.activeId;
+        const live = this.wake(
+            this.state.live.filter(id => adopted.tabs.some(t => t.id === id)),
+            activeId,
+        );
+        for (const id of this.sleepTimers.keys()) if (!adopted.tabs.some(t => t.id === id)) this.cancelSleep(id);
+
+        const next: AppState = { ...adopted, activeId, live };
+        this.rev = rev;
+        this.published = JSON.stringify({ tabs: next.tabs, activeId, bar: next.bar, seq: next.seq });
+        this.applyActiveGlobals(next);
+        this.syncUrlTab(activeId);
+        this.setState(next);
     }
 
     private activeTab(s: TabsState): TabInfo | undefined {
@@ -292,9 +330,15 @@ export class App extends Component<Record<string, never>, AppState> {
     @bind
     private closeTab(id: string) {
         const { tabs, activeId, live } = this.state;
-        if (tabs.length <= 1) return; // never close the last tab
         const idx = tabs.findIndex(t => t.id === id);
+        if (idx < 0) return;
         const closing = tabs[idx];
+        // Never close the last tab of the namespace in view. The strip only
+        // lists this group, so removing it would leave nothing here to focus
+        // and drop the user into some other session's tab — the exact jump the
+        // scoped strip exists to prevent. Other groups are closed as a whole,
+        // from the popover.
+        if (tabs.filter(t => t.group === closing.group).length <= 1) return;
         const nextTabs = tabs.filter(t => t.id !== id);
         this.cancelSleep(id);
         let nextLive = live.filter(x => x !== id);
@@ -304,13 +348,49 @@ export class App extends Component<Record<string, never>, AppState> {
             // scoped view doesn't jump to another session; only when the group is
             // now empty do we fall back to any remaining tab. Nearest-left wins,
             // Chrome-like.
-            const sameGroup = nextTabs.filter(t => t.group === closing?.group);
+            const sameGroup = nextTabs.filter(t => t.group === closing.group);
+            // The guard above leaves at least one sibling, so this pool is
+            // non-empty; the fallback only covers a list that arrived broken.
             const pool = sameGroup.length ? sameGroup : nextTabs;
             const before = pool.filter(t => tabs.indexOf(t) < idx);
             nextActive = (before.length ? before[before.length - 1] : pool[0]).id;
             nextLive = this.wake(nextLive, nextActive);
         }
         this.commit({ ...this.state, tabs: nextTabs, activeId: nextActive, live: nextLive });
+    }
+
+    // Namespaces other than the one on screen, with how many tabs each holds.
+    // The strip is scoped to the active group, so without a list here a tab
+    // opened under a different session name is unreachable *and* invisible: it
+    // keeps riding along in the synced layout with no way to return to it or
+    // throw it away.
+    private otherGroups(s: AppState, group: string): { group: string; count: number }[] {
+        const counts = new Map<string, number>();
+        for (const t of s.tabs) if (t.group !== group) counts.set(t.group, (counts.get(t.group) ?? 0) + 1);
+        return [...counts.entries()].map(([name, count]) => ({ group: name, count }));
+    }
+
+    // Move to another namespace by activating one of its tabs — which is what
+    // makes the strip switch to it, since the strip follows the active tab.
+    @bind
+    private switchGroup(group: string) {
+        const target = this.state.tabs.find(t => t.group === group);
+        if (target) this.selectTab(target.id);
+    }
+
+    // Drop a whole namespace from the layout. Same contract as closing a tab:
+    // the tmux sessions behind it keep running on the host, this only stops the
+    // UI carrying them around. Refuses the active group, which the close guard
+    // in closeTab already protects one tab at a time.
+    @bind
+    private closeGroup(group: string) {
+        const active = this.activeTab(this.state);
+        if (!group || group === (active?.group ?? '')) return;
+        const tabs = this.state.tabs.filter(t => t.group !== group);
+        if (tabs.length === this.state.tabs.length || tabs.length === 0) return;
+        for (const t of this.state.tabs) if (t.group === group) this.cancelSleep(t.id);
+        const live = this.state.live.filter(id => tabs.some(t => t.id === id));
+        this.commit({ ...this.state, tabs, live });
     }
 
     @bind
@@ -395,25 +475,20 @@ export class App extends Component<Record<string, never>, AppState> {
         }
     }
 
-    @bind
-    private setShowAll(showAllGroups: boolean) {
-        this.commit({ ...this.state, bar: { ...this.state.bar, showAllGroups } });
-    }
-
     render() {
         const { tabs, activeId, bar, live } = this.state;
         const active = this.activeTab(this.state);
-        const showAll = bar.showAllGroups ?? false;
-        // The namespace in view is the active tab's group; scope the strip to it
-        // unless "show all sessions" is on.
+        // The namespace in view is the active tab's group; the strip is always
+        // scoped to it, so tabs of other sessions stay out of sight.
         const group = active?.group ?? active?.session ?? '';
-        const visibleTabs = tabsInView(tabs, group, showAll);
+        const visibleTabs = tabsInView(tabs, group);
+        const otherGroups = this.otherGroups(this.state, group);
         const rootClass = ['app-root', `bar-${bar.position}`, bar.menuMode ? 'bar-menu' : ''].filter(Boolean).join(' ');
         return (
             <div class={rootClass}>
                 <TabBar
                     tabs={visibleTabs}
-                    totalTabs={tabs.length}
+                    otherGroups={otherGroups}
                     activeId={activeId}
                     liveIds={live}
                     position={bar.position}
@@ -422,8 +497,6 @@ export class App extends Component<Record<string, never>, AppState> {
                     opacity={bar.opacity ?? BAR_OPACITY_DEFAULT}
                     colWidth={bar.colWidth ?? 190}
                     autoHide={bar.autoHide ?? false}
-                    showAllGroups={showAll}
-                    groupLabel={group}
                     onSelect={this.selectTab}
                     onClose={this.closeTab}
                     onAdd={this.addTab}
@@ -432,32 +505,35 @@ export class App extends Component<Record<string, never>, AppState> {
                     onSetOpacity={this.setBarOpacity}
                     onSetColWidth={this.setBarColWidth}
                     onSetAutoHide={this.setBarAutoHide}
-                    onSetShowAll={this.setShowAll}
                     onReorder={this.reorderTabs}
                     onRename={this.renameTab}
+                    onSwitchGroup={this.switchGroup}
+                    onCloseGroup={this.closeGroup}
                 />
                 <div class="term-stage">
-                    {tabs.map(t => (
-                        <div key={t.id} class={`term-pane${t.id === activeId ? ' active' : ''}`}>
-                            {/* Sleeping tabs render no Terminal — socket + WebGL
+                    {tabs
+                        .filter(t => t.group === group || live.includes(t.id))
+                        .map(t => (
+                            <div key={t.id} class={`term-pane${t.id === activeId ? ' active' : ''}`}>
+                                {/* Sleeping tabs render no Terminal — socket + WebGL
                                 released until the tab is activated again. The
                                 active tab is always live, so its pane always
                                 has a Terminal. */}
-                            {live.includes(t.id) ? (
-                                <Terminal
-                                    id={`terminal-${t.id}`}
-                                    active={t.id === activeId}
-                                    wsUrl={wsUrlFor(t.search)}
-                                    tokenUrl={tokenUrl}
-                                    fileUploadUrl={fileUploadUrl}
-                                    clientOptions={clientOptions}
-                                    termOptions={termOptions}
-                                    flowControl={flowControl}
-                                    onTitle={title => this.onTabTitle(t.id, title)}
-                                />
-                            ) : null}
-                        </div>
-                    ))}
+                                {live.includes(t.id) ? (
+                                    <Terminal
+                                        id={`terminal-${t.id}`}
+                                        active={t.id === activeId}
+                                        wsUrl={wsUrlFor(t.search)}
+                                        tokenUrl={tokenUrl}
+                                        fileUploadUrl={fileUploadUrl}
+                                        clientOptions={clientOptions}
+                                        termOptions={termOptions}
+                                        flowControl={flowControl}
+                                        onTitle={title => this.onTabTitle(t.id, title)}
+                                    />
+                                ) : null}
+                            </div>
+                        ))}
                 </div>
                 <VirtualKeyboard sessionName={active?.session} />
             </div>

@@ -4,7 +4,7 @@ import type { BarMode, BarPosition, TabInfo } from './model';
 
 interface Props {
     tabs: TabInfo[]; // tabs to render (already scoped to the current view)
-    totalTabs: number; // total tab count across all groups (governs "can close last")
+    otherGroups: { group: string; count: number }[]; // namespaces not in view, listed in the popover
     activeId: string;
     liveIds: string[]; // tabs with a live connection; others are asleep
     position: BarPosition;
@@ -13,8 +13,6 @@ interface Props {
     opacity: number; // opacity of the bar's chrome (chips/buttons); 1 = solid
     colWidth: number; // column width (px) in left/right mode
     autoHide: boolean; // collapse the bar when idle; reveal on edge-hover
-    showAllGroups: boolean; // show every tab vs only the active tab's namespace
-    groupLabel: string; // the active namespace (entry session name)
     onSelect: (id: string) => void;
     onClose: (id: string) => void;
     onAdd: () => void;
@@ -23,9 +21,10 @@ interface Props {
     onSetOpacity: (opacity: number) => void;
     onSetColWidth: (width: number) => void;
     onSetAutoHide: (v: boolean) => void;
-    onSetShowAll: (v: boolean) => void;
     onReorder: (fromId: string, targetId: string) => void;
     onRename: (id: string, title: string) => void;
+    onSwitchGroup: (group: string) => void;
+    onCloseGroup: (group: string) => void;
 }
 
 interface State {
@@ -395,31 +394,47 @@ export class TabBar extends Component<Props, State> {
                 {this.renderScaleControl()}
                 {this.renderOpacityControl()}
                 {this.renderAutoHideControl()}
-                {this.renderGroupToggle()}
+                {this.renderGroupList(onDone)}
             </div>
         );
     }
 
-    // Toggle for scoping the tab list. Checked = only the tabs of the current
-    // session (namespace); unchecked = every tab across all sessions. The label
-    // names the active namespace so it's clear what "this session" refers to.
-    private renderGroupToggle() {
-        const { showAllGroups, groupLabel, onSetShowAll } = this.props;
-        const scoped = !showAllGroups;
+    // The namespaces that are not on screen. The strip is deliberately scoped to
+    // the active one, so this list is the only way back to a tab opened under a
+    // different session name — and the only way to throw one away, which
+    // otherwise rides along in the synced layout forever. Clicking a row moves
+    // there; ✕ drops the whole namespace from the layout (the tmux sessions
+    // behind it keep running on the host, exactly as when a tab is closed).
+    private renderGroupList(onDone: () => void) {
+        const { otherGroups, onSwitchGroup, onCloseGroup } = this.props;
+        if (!otherGroups.length) return null;
         return (
-            <button
-                class={`tabbar-pop-row tabbar-toggle-row${scoped ? ' active' : ''}`}
-                title="Show only the tabs opened under this session name, or all sessions"
-                role="switch"
-                aria-checked={scoped}
-                onClick={() => onSetShowAll(scoped)}
-            >
-                <span class="tabbar-check">{scoped ? '☑' : '☐'}</span>
-                <span class="tabbar-toggle-label">
-                    Only this session
-                    {groupLabel ? <span class="tabbar-group-name">{groupLabel}</span> : null}
-                </span>
-            </button>
+            <div class="tabbar-group-list">
+                <div class="tabbar-pop-title">Other sessions</div>
+                {otherGroups.map(g => (
+                    <div key={g.group} class="tabbar-pop-row tabbar-group-row">
+                        <button
+                            class="tabbar-group-open"
+                            title={`Switch to ${g.group}`}
+                            onClick={() => {
+                                onSwitchGroup(g.group);
+                                onDone();
+                            }}
+                        >
+                            <span class="tabbar-group-name">{g.group}</span>
+                            <span class="tabbar-group-count">{g.count}</span>
+                        </button>
+                        <button
+                            class="tabbar-group-close"
+                            title={`Remove the ${g.group} tabs from this layout`}
+                            aria-label={`Remove ${g.group}`}
+                            onClick={() => onCloseGroup(g.group)}
+                        >
+                            ✕
+                        </button>
+                    </div>
+                ))}
+            </div>
         );
     }
 
@@ -519,12 +534,14 @@ export class TabBar extends Component<Props, State> {
     }
 
     private renderChip(t: TabInfo, inMenu: boolean) {
-        const { activeId, liveIds, onClose, totalTabs } = this.props;
+        const { activeId, liveIds, onClose, tabs } = this.props;
         const active = t.id === activeId;
         const asleep = !liveIds.includes(t.id);
-        // Close is governed by the total across all namespaces, not the scoped
-        // view: a lone visible tab may still be closed when other groups exist.
-        const canClose = totalTabs > 1;
+        // Governed by the scoped list, not the total across namespaces: the
+        // strip only shows this group, so closing its last chip would have to
+        // focus a tab from a session that is not on screen. Whole namespaces
+        // are disposed of from the popover instead.
+        const canClose = tabs.length > 1;
         const dragging = this.state.dragId === t.id;
         const editing = this.state.editingId === t.id;
         return (
