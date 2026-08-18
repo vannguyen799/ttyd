@@ -43,6 +43,25 @@ static bool accept_gzip(struct lws *wsi) {
   return len > 0 && strstr(buf, "gzip") != NULL;
 }
 
+// Validator for the embedded bundle, computed once and then reused. The bundle
+// is baked into the binary, so this value only changes when ttyd itself does —
+// which is exactly when a browser has to stop reusing what it cached. Encoding
+// is part of it: the gzip stream and the inflated HTML are different bytes and
+// must not share a cache entry.
+static const char *index_etag(bool gzip) {
+  static char gz[24], raw[24];
+  if (gz[0] == '\0') {
+    unsigned long long h = 1469598103934665603ULL;
+    for (size_t i = 0; i < index_html_len; i++) {
+      h ^= index_html[i];
+      h *= 1099511628211ULL;
+    }
+    snprintf(gz, sizeof(gz), "\"%016llx-gz\"", h);
+    snprintf(raw, sizeof(raw), "\"%016llx\"", h);
+  }
+  return gzip ? gz : raw;
+}
+
 static bool uncompress_html(char **output, size_t *output_len) {
   if (html_cache == NULL || html_cache_len == 0) {
     z_stream stream;
@@ -898,23 +917,59 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         int n = lws_serve_http_file(wsi, server->index, content_type, NULL, 0);
         if (n < 0 || (n > 0 && lws_http_transaction_completed(wsi))) return 1;
       } else {
+        // Serve the embedded bundle pre-gzipped whenever the client takes it:
+        // index_html is already the gzip stream (237 KB vs 875 KB inflated), so
+        // this is the whole page-load cost for a UI that is one inline blob.
+        //
+        // lws's own stream compression is NOT a substitute, even when the lib is
+        // built with it: it only engages for responses whose length it controls,
+        // and the explicit Content-Length below pins the body — so deferring to
+        // it shipped the inflated 875 KB on every load. Do the encoding here and
+        // the ifdef disappears with it.
+        bool gzip = accept_gzip(wsi);
+        const char *etag = index_etag(gzip);
+
+        // Every new browser tab, every reload and every reconnect asks for this
+        // page again, and the answer is the same bytes until ttyd is upgraded.
+        // A validator turns all of those into a 304 with no body — the 237 KB
+        // is paid once per version instead of once per load. no-cache (rather
+        // than a max-age) keeps the round trip, so an upgraded server is picked
+        // up on the very next load instead of whenever a timer happens to run
+        // out.
+        char inm[64];
+        int inm_len = lws_hdr_copy(wsi, inm, sizeof(inm), WSI_TOKEN_HTTP_IF_NONE_MATCH);
+        if (inm_len > 0 && strcmp(inm, etag) == 0) {
+          if (lws_add_http_header_status(wsi, HTTP_STATUS_NOT_MODIFIED, &p, end) ||
+              lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_ETAG, (unsigned char *)etag, (int)strlen(etag), &p,
+                                           end) ||
+              lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CACHE_CONTROL, (unsigned char *)"no-cache", 8, &p,
+                                           end) ||
+              lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_VARY, (unsigned char *)"accept-encoding", 15, &p, end) ||
+              add_session_cookie(wsi, pss, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
+              lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
+            return 1;
+          goto try_to_reuse;
+        }
+
         char *output = (char *)index_html;
         size_t output_len = index_html_len;
         if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE, (const unsigned char *)content_type, 9, &p,
                                          end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_ETAG, (unsigned char *)etag, (int)strlen(etag), &p, end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CACHE_CONTROL, (unsigned char *)"no-cache", 8, &p, end) ||
+            // Two different bodies live at this one URL. Without this a shared
+            // cache in front of ttyd can hand the gzip stream to a client that
+            // never asked for it, which renders as a page of binary.
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_VARY, (unsigned char *)"accept-encoding", 15, &p, end) ||
             add_session_cookie(wsi, pss, &p, end))
           return 1;
-#ifdef LWS_WITH_HTTP_STREAM_COMPRESSION
-        if (!uncompress_html(&output, &output_len)) return 1;
-#else
-        if (accept_gzip(wsi)) {
+        if (gzip) {
           if (lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_ENCODING, (unsigned char *)"gzip", 4, &p, end))
             return 1;
         } else {
           if (!uncompress_html(&output, &output_len)) return 1;
         }
-#endif
 
         if (lws_add_http_header_content_length(wsi, (unsigned long)output_len, &p, end) ||
             lws_finalize_http_header(wsi, &p, end) ||
