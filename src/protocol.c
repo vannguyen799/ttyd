@@ -87,7 +87,8 @@ static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
   }
 
   if (eof && !process_running(process))
-    ctx->pss->lws_close_status = process->exit_code == 0 ? 1000 : 1006;
+    ctx->pss->lws_close_status =
+        process->exit_code == 0 ? LWS_CLOSE_STATUS_NORMAL : LWS_CLOSE_STATUS_UNEXPECTED_CONDITION;
   else
     ctx->pss->pty_buf = buf;
   lws_callback_on_writable(ctx->pss->wsi);
@@ -102,7 +103,8 @@ static void process_exit_cb(pty_process *process) {
 
   lwsl_notice("process exited with code %d, pid: %d\n", process->exit_code, process->pid);
   ctx->pss->process = NULL;
-  ctx->pss->lws_close_status = process->exit_code == 0 ? 1000 : 1006;
+  ctx->pss->lws_close_status =
+      process->exit_code == 0 ? LWS_CLOSE_STATUS_NORMAL : LWS_CLOSE_STATUS_UNEXPECTED_CONDITION;
   lws_callback_on_writable(ctx->pss->wsi);
 
 done:
