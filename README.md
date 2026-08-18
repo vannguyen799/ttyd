@@ -36,7 +36,7 @@ deploy kit:
 | Virtual keyboard | Grouped/scalable keys, tmux scroll & copy-mode controls, Claude/Codex slash-command shortcuts, custom buttons, Android/iOS input fixes |
 | Tabs | Multi-tab UI, auto-hide overlay bar, per-session tab groups, new tabs inherit the active tab's `cwd:`, per-tab sleep/wake, server-side tab layout shared across devices (`--tabs-file`) |
 | Mobile | Auto-reconnect on tab re-activation, client-side auth-token persistence, no leave-site alert (tmux persists) |
-| Auth | One password prompt per 30 days instead of one per browser restart — a successful login gets a `HttpOnly` session cookie that survives a ttyd restart (`--auth-max-age`, `--session-file`) |
+| Auth | One password prompt per 30 days instead of one per browser restart — a successful login gets a `HttpOnly` session cookie that survives a ttyd restart (`--auth-max-age`, `--session-file`). A front-end that already authenticated the user can skip the prompt entirely: `POST /login` mints a one-time link (see below) |
 | Clipboard | Reliable copy-out under tmux, touch select mode, floating selection tooltip, Claude/Codex file paste-in (any type, multi-file, drag & drop) |
 | tmux | Mouse-driven pane switching, drag-to-copy, wheel/prefix scroll into copy-mode, buffer→clipboard keys |
 | Persistence | Pane layout restored after a reboot (resurrect/continuum, installed automatically), agent panes resumed into their own `claude`/`codex` session |
@@ -228,6 +228,50 @@ OPTIONS:
 ```
 
 Read the example usage on the upstream [wiki](https://github.com/tsl0922/ttyd/wiki/Example-Usage).
+
+### One-time login links
+
+A front-end that has already authenticated someone should not make them type
+ttyd's password again. Ask ttyd for a link instead — the request needs the
+password (or a live session cookie), so it gives away nothing the caller could
+not already do:
+
+```console
+$ curl -s -u user:secret -X POST http://127.0.0.1:7681/login
+{"token": "9f3c…", "url": "/login?t=9f3c…", "expires_in": 120}
+```
+
+Then send the browser to that URL and it lands logged in:
+
+```
+https://ttyd.example.com/login?t=9f3c…&r=/?arg=cwd:/srv/app
+```
+
+The token buys exactly one login and expires in two minutes, so it is safe to
+put in a redirect but useless in a log or a browser history. Only a `GET`
+redeems it, so a link preview or mail scanner firing `HEAD` at the URL cannot
+burn the link before the person clicks it.
+
+Optional `r=` picks where to land afterwards and must be a plain absolute path
+on this server — a scheme, a `//host` shorthand or a control character falls
+back to the index. Percent-encode it if the target carries more than one
+argument, or the `&` ends the value and the rest is silently dropped:
+
+```
+https://ttyd.example.com/login?t=9f3c…&r=%2F%3Farg%3Dcwd%3A%2Fsrv%2Fapp%26arg%3Dname%3Aapi
+```
+
+Basic auth keeps working underneath, so the terminal is still reachable when
+whatever issues these links is down. The endpoint needs the session cookie to
+be what gets a request in, so it answers `404` under `--auth-max-age 0` (no
+cookies) and under `--auth-header` (a proxy decides, and it will not look at
+ttyd's cookie).
+
+**What the browser receives is a full login, not a scoped one.** A logged-in
+page reads `/token` to get the credential it replays on reconnect, so whoever
+opens the link ends up holding the same password anyone typing it would — the
+"one-time" part is about the *link*, not about what it grants. Send links only
+to people you would give the password to.
 
 ## Browser Support
 

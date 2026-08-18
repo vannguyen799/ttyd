@@ -420,6 +420,170 @@ static int add_session_cookie(struct lws *wsi, struct pss_http *pss, unsigned ch
   return lws_add_http_header_by_name(wsi, (unsigned char *)"set-cookie:", (unsigned char *)value, n, p, end);
 }
 
+static int hex_value(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// ── one-time login links ───────────────────────────────────────────────────
+//
+// A link that logs one browser in without a password prompt, so a front-end
+// that has already authenticated the user does not make them prove it twice.
+//
+//   POST /login                 Mints a one-time token. Behind the ordinary
+//                               auth check, so the caller has just proven it
+//                               holds the password (or a live session).
+//
+//   GET  /login?t=<token>[&r=]  Spends it, and hands back the same login cookie
+//                               basic auth issues — nothing downstream needs to
+//                               know a link was involved.
+//
+// The token is not a bearer credential for the terminal: it buys exactly one
+// login, once, within a couple of minutes. Basic auth stays underneath, so the
+// terminal is still reachable when whatever issues these links is down.
+//
+// What it buys is a *full* login, though, not a scoped one: a logged-in page
+// reads the credential back from /token to replay on reconnect, so the browser
+// that redeems a link ends up holding the password. The one-time part protects
+// the link in transit, not the browser at the end of it.
+
+// How many unspent links may be outstanding, and how long each one lives. The
+// window only has to cover a redirect the front-end triggers immediately; the
+// table only has to cover the logins in flight at one moment.
+#define MAX_LOGIN_LINKS 16
+#define LOGIN_LINK_MAX_AGE 120
+
+// Kept apart from `sessions`: these are not logins yet, they only buy one. A
+// process restart drops them, which costs nothing — the front-end mints another
+// on the next click, unlike a session, which is why sessions have a file and
+// these do not.
+static struct {
+  char token[SESSION_TOKEN_HEX + 1];
+  long long expiry;
+} login_links[MAX_LOGIN_LINKS];
+static int login_link_count = 0;
+
+static void login_links_prune(long long now) {
+  int kept = 0;
+  for (int i = 0; i < login_link_count; i++)
+    if (login_links[i].expiry > now) login_links[kept++] = login_links[i];
+  login_link_count = kept;
+}
+
+// Mint a token for a caller that has already authenticated. Writes
+// SESSION_TOKEN_HEX + 1 bytes into `out`, or leaves it empty when the platform
+// has no randomness to give — an unguessable token is the entire mechanism, so
+// there is no degraded mode worth offering.
+static void login_link_issue(char *out) {
+  unsigned char raw[SESSION_TOKEN_BYTES];
+  if (lws_get_random(context, raw, sizeof(raw)) != sizeof(raw)) {
+    lwsl_warn("login: no randomness available, issuing no link\n");
+    out[0] = '\0';
+    return;
+  }
+
+  static const char hex[] = "0123456789abcdef";
+  for (size_t i = 0; i < sizeof(raw); i++) {
+    out[i * 2] = hex[raw[i] >> 4];
+    out[i * 2 + 1] = hex[raw[i] & 0xf];
+  }
+  out[SESSION_TOKEN_HEX] = '\0';
+
+  long long now = (long long)time(NULL);
+  login_links_prune(now);
+  // Full means links are being minted faster than they are spent. Dropping the
+  // oldest keeps the newest — the one someone is most likely still waiting on.
+  if (login_link_count == MAX_LOGIN_LINKS) {
+    memmove(&login_links[0], &login_links[1], (size_t)(MAX_LOGIN_LINKS - 1) * sizeof(login_links[0]));
+    login_link_count--;
+  }
+  memcpy(login_links[login_link_count].token, out, SESSION_TOKEN_HEX + 1);
+  login_links[login_link_count].expiry = now + LOGIN_LINK_MAX_AGE;
+  login_link_count++;
+}
+
+// Spend a token. Removing it before returning is what makes it one-time, so a
+// link replayed from a browser history or a proxy log buys nothing.
+static bool login_link_claim(const char *token) {
+  long long now = (long long)time(NULL);
+  login_links_prune(now);
+
+  for (int i = 0; i < login_link_count; i++) {
+    if (!token_equal(login_links[i].token, token)) continue;
+    memmove(&login_links[i], &login_links[i + 1], (size_t)(login_link_count - i - 1) * sizeof(login_links[0]));
+    login_link_count--;
+    return true;
+  }
+  return false;
+}
+
+static bool is_lower_hex(const char *s, size_t len) {
+  for (size_t i = 0; i < len; i++)
+    if (hex_value(s[i]) < 0 || (s[i] >= 'A' && s[i] <= 'F')) return false;
+  return true;
+}
+
+// Copy one `name=` fragment out of the query string. Returns false when the
+// query carries no such name, or its value does not fit.
+static bool url_arg(struct lws *wsi, const char *name, char *out, size_t out_len) {
+  char frag[512];
+  size_t name_len = strlen(name);
+  for (int i = 0; lws_hdr_copy_fragment(wsi, frag, sizeof(frag), WSI_TOKEN_HTTP_URI_ARGS, i) > 0; i++) {
+    if (strncmp(frag, name, name_len) != 0 || frag[name_len] != '=') continue;
+    const char *value = frag + name_len + 1;
+    if (strlen(value) >= out_len) return false;
+    snprintf(out, out_len, "%s", value);
+    return true;
+  }
+  return false;
+}
+
+// Login links only mean anything when a session cookie is what gets a request
+// past the gate. --auth-header hands that decision to a proxy, which never
+// looks at our cookie, and --auth-max-age 0 turns cookies off outright: in both
+// cases a redeemed link would mint a credential nothing downstream accepts, and
+// the browser would land straight back on the login it was meant to skip.
+static bool login_links_enabled(void) { return server->auth_header == NULL && server->auth_max_age > 0; }
+
+// Whether this request is a GET. Spending a one-time token is a side effect, so
+// it must not happen on a method that is supposed to have none: link previews
+// in chat apps and mail scanners fire HEAD at every URL they are shown, and a
+// HEAD that redeemed the link would leave the person who clicks it a 403.
+static bool is_get(struct lws *wsi) {
+  if (lws_hdr_total_length(wsi, WSI_TOKEN_GET_URI) > 0) return true;
+#if defined(LWS_ROLE_H2)
+  char method[8];
+  if (lws_hdr_copy(wsi, method, sizeof(method), WSI_TOKEN_HTTP_COLON_METHOD) > 0) return strcmp(method, "GET") == 0;
+#endif
+  return false;
+}
+
+// Read `?t=` and spend it. On success the browser held a link this server
+// minted in the last couple of minutes, and had not used it before.
+static bool login_link_from_url(struct lws *wsi) {
+  char token[SESSION_TOKEN_HEX + 1];
+  if (!url_arg(wsi, "t", token, sizeof(token))) return false;
+  // Length and alphabet first: token_equal reads a fixed SESSION_TOKEN_HEX
+  // bytes, so a short value would walk off the end of this buffer.
+  if (strlen(token) != SESSION_TOKEN_HEX || !is_lower_hex(token, SESSION_TOKEN_HEX)) return false;
+  return login_link_claim(token);
+}
+
+// Where to land after a successful login. `?r=` lets the issuer aim at a
+// specific terminal (`/?arg=cwd:/srv/app`), but only ever within this server:
+// anything not a plain absolute path — a scheme, a `//host` shorthand, a
+// backslash some parsers read as a slash — makes this an open redirect for
+// whoever can read a link, so those fall back to the index.
+static const char *login_redirect_target(struct lws *wsi, char *out, size_t out_len) {
+  if (!url_arg(wsi, "r", out, out_len)) return endpoints.index;
+  if (out[0] != '/' || out[1] == '/' || out[1] == '\\') return endpoints.index;
+  for (const char *c = out; *c != '\0'; c++)
+    if ((unsigned char)*c < 0x20 || *c == '\\') return endpoints.index;
+  return out;
+}
+
 static int send_unauthorized(struct lws *wsi, unsigned int code, enum lws_token_indexes header) {
   unsigned char buffer[1024 + LWS_PRE], *p, *end;
   p = buffer + LWS_PRE;
@@ -491,12 +655,6 @@ static void tabs_store(struct pss_http *pss) {
   json_result(pss, HTTP_STATUS_OK, NULL, NULL);
 }
 
-static int hex_value(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  return -1;
-}
 
 // Pick up the filename the browser attached to an upload. An HTTP header may
 // only carry ASCII while a filename may be anything, so the UI sends it
@@ -545,6 +703,35 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       snprintf(pss->path, sizeof(pss->path), "%s", (const char *)in);
       pss->wsi = wsi;
       request_reset(pss);  // the connection may be reused across requests
+
+      // Ahead of check_auth on purpose: arriving without a credential is the
+      // entire point of a login link. Only the GET half skips auth; POST mints
+      // tokens and is handled below, behind check_auth.
+      if (login_links_enabled() && strcmp(pss->path, endpoints.login) == 0 && is_get(wsi)) {
+        if (!login_link_from_url(wsi)) {
+          // No detail in the body: whether the token expired, was already
+          // spent, or never existed is exactly what a guesser would like told.
+          lwsl_warn("login: rejected link\n");
+          lws_return_http_status(wsi, HTTP_STATUS_FORBIDDEN, NULL);
+          goto try_to_reuse;
+        }
+
+        char target[256];
+        const char *location = login_redirect_target(wsi, target, sizeof(target));
+        session_issue(pss->cookie);
+
+        p = buffer + LWS_PRE;
+        end = p + sizeof(buffer) - LWS_PRE;
+        if (lws_add_http_header_status(wsi, HTTP_STATUS_FOUND, &p, end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_LOCATION, (unsigned char *)location,
+                                         (int)strlen(location), &p, end) ||
+            add_session_cookie(wsi, pss, &p, end) ||
+            lws_add_http_header_content_length(wsi, 0, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
+            lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
+          return 1;
+        goto try_to_reuse;
+      }
+
       switch (check_auth(wsi, pss)) {
         case AUTH_OK:
           break;
@@ -571,6 +758,55 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
           return 1;
 
         pss->buffer = pss->ptr = strdup(buf);
+        pss->len = n;
+        lws_callback_on_writable(wsi);
+        break;
+      }
+
+      // Mint a one-time login link. The caller has just proven it holds the
+      // password (or a live session), so handing it a token gives away nothing
+      // it could not already do — while letting it hand a browser a login
+      // without putting the password itself in a URL.
+      if (strcmp(pss->path, endpoints.login) == 0) {
+        if (!login_links_enabled()) {
+          // Nothing a token could redeem into. Reported as absent rather than
+          // failed: under --auth-header or --auth-max-age 0 this endpoint
+          // genuinely is not part of the server.
+          lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
+          goto try_to_reuse;
+        }
+
+        char link[SESSION_TOKEN_HEX + 1];
+        login_link_issue(link);
+        if (link[0] == '\0') {
+          lws_return_http_status(wsi, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+          goto try_to_reuse;
+        }
+
+        // Its own buffer, not the shared `buf`: two 64-char tokens plus a
+        // base-path-prefixed endpoint overrun 256 well before anything says so.
+        char json[512];
+        int written = snprintf(json, sizeof(json), "{\"token\": \"%s\", \"url\": \"%s?t=%s\", \"expires_in\": %d}",
+                               link, endpoints.login, link, LOGIN_LINK_MAX_AGE);
+        if (written <= 0 || (size_t)written >= sizeof(json)) {
+          lws_return_http_status(wsi, HTTP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+          goto try_to_reuse;
+        }
+        size_t n = (size_t)written;
+
+        if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
+                                         (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
+            // No shared cache should ever hold one of these.
+            lws_add_http_header_by_name(wsi, (unsigned char *)"cache-control:", (unsigned char *)"no-store", 8, &p,
+                                        end) ||
+            add_session_cookie(wsi, pss, &p, end) ||
+            lws_add_http_header_content_length(wsi, (unsigned long)n, &p, end) ||
+            lws_finalize_http_header(wsi, &p, end) ||
+            lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
+          return 1;
+
+        pss->buffer = pss->ptr = strdup(json);
         pss->len = n;
         lws_callback_on_writable(wsi);
         break;

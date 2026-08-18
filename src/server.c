@@ -29,7 +29,7 @@
 volatile bool force_exit = false;
 struct lws_context *context;
 struct server *server;
-struct endpoints endpoints = {"/ws", "/", "/token", "", "/image-upload", "/tabs"};
+struct endpoints endpoints = {"/ws", "/", "/token", "", "/image-upload", "/tabs", "/login"};
 
 extern int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
 extern int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
@@ -183,6 +183,7 @@ static void print_config() {
     if (server->auth_max_age > 0) {
       lwsl_notice("  login remembered for: %d seconds\n", server->auth_max_age);
       lwsl_notice("  session file: %s\n", server->session_file != NULL ? server->session_file : "(memory only)");
+      lwsl_notice("  one-time login links: POST %s\n", endpoints.login);
     } else {
       lwsl_notice("  login remembered for: disabled\n");
     }
@@ -601,7 +602,7 @@ int main(int argc, char **argv) {
 #define sc(f)                                  \
   strncpy(path + len, endpoints.f, 128 - len); \
   endpoints.f = strdup(path);
-        sc(ws) sc(index) sc(token) sc(parent) sc(image) sc(tabs)
+        sc(ws) sc(index) sc(token) sc(parent) sc(image) sc(tabs) sc(login)
 #undef sc
       } break;
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000

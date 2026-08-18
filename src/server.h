@@ -25,6 +25,7 @@ struct endpoints {
   char *parent;
   char *image;
   char *tabs;
+  char *login;
 };
 
 extern volatile bool force_exit;
