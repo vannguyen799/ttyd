@@ -156,18 +156,26 @@ else
     log "Installed ttyd-pro to $INSTALL_DIR/ttyd-pro"
 fi
 
-# The session wrapper, next to the binary.
+# The session wrapper and its helpers, next to the binary.
 #
-# Without it a deployment can only run a fixed child command, so every browser
-# tab lands in the same tmux session and `?arg=cwd:…&arg=name:…` has nowhere to
-# be interpreted — the routing the UI is built around simply does not happen.
-# Best-effort on purpose: a release published before the wrapper became an asset
-# still installs a working binary, and a plain terminal is a far better outcome
-# than a failed install.
-install_session_wrapper() {
-    WRAPPER="ttyd-session.sh"
+# Without the wrapper a deployment can only run a fixed child command, so every
+# browser tab lands in the same tmux session and `?arg=cwd:…&arg=name:…` has
+# nowhere to be interpreted — the routing the UI is built around simply does not
+# happen.
+#
+# ttyd-snapshot.sh and ttyd-reap-idle.sh are its companions: the wrapper looks
+# for ttyd-snapshot.sh beside itself to rebuild a session the reaper parked, and
+# quietly does without it when absent. Installing them into the same directory
+# is what makes parking and restoring reachable from a release, instead of only
+# from a git checkout.
+#
+# Best-effort on purpose, all three: a release published before a given script
+# became an asset still installs a working binary, and a plain terminal is a far
+# better outcome than a failed install.
+install_deploy_script() {
+    WRAPPER="$1"
     curl --proto '=https' --tlsv1.2 -fL "$RELEASE_BASE/$WRAPPER" -o "$TMP_DIR/$WRAPPER" 2>/dev/null || {
-        log "Note: $WRAPPER is not published in this release; session routing stays unavailable."
+        log "Note: $WRAPPER is not published in this release; skipping it."
         return 0
     }
     WRAPPER_EXPECTED=$(awk -v name="$WRAPPER" '$2 == name || $2 == "*" name { print $1; exit }' "$TMP_DIR/SHA256SUMS")
@@ -185,7 +193,9 @@ install_session_wrapper() {
     mv -f "$WRAPPER_TMP" "$INSTALL_DIR/$WRAPPER"
     log "Installed $WRAPPER to $INSTALL_DIR/$WRAPPER"
 }
-install_session_wrapper
+install_deploy_script ttyd-session.sh
+install_deploy_script ttyd-snapshot.sh
+install_deploy_script ttyd-reap-idle.sh
 
 add_to_path() {
     case ":${PATH:-}:" in *":$INSTALL_DIR:"*) return ;; esac
