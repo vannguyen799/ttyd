@@ -145,16 +145,30 @@ builds, and starts everything in one shot. That VPS bootstrap uses `sudo` for `a
 # Publishing a release
 
 GitHub Actions builds Linux, macOS, and Windows binaries, publishes them with `SHA256SUMS`, and
-publishes multi-architecture container images to this repository's GHCR namespace. To publish a
-new CLI version, update `project(ttyd VERSION ...)` in `CMakeLists.txt`, then push the matching
-`vMAJOR.MINOR.PATCH` tag. For example:
+publishes multi-architecture container images to this repository's GHCR namespace.
+
+To publish a new CLI version, update `project(ttyd VERSION ...)` in `CMakeLists.txt` (and the
+matching `version` in `html/package.json`), commit, push the `vMAJOR.MINOR.PATCH` tag, then start
+the workflow explicitly:
 
 ```bash
 git tag v1.11.0
 git push origin v1.11.0
+gh workflow run release.yml -f tag=v1.11.0
 ```
 
-The public installer starts working after that tag's release workflow completes. Releases are not
+**The dispatch is not optional here.** `release.yml` does declare `on: push: tags`, but this
+repository is a fork and push events have never triggered a workflow run in it — every release in
+its history, v1.8.0 and v1.9.0 included, was published by `workflow_dispatch`. Pushing the tag
+alone leaves no run queued and no release created; v1.10.0 was tagged and never published for
+exactly this reason. The workflow reads `inputs.tag || github.ref_name`, so the dispatched form
+builds the same tag.
+
+The dispatched run checks out the default branch, and its first step fails the build unless the
+tag matches `project(ttyd VERSION ...)` — so push the version-bump commit to `main` before
+dispatching.
+
+The public installer starts working after that release workflow completes. Releases are not
 drafts; the newest semantic-version tag becomes GitHub's latest release.
 
 # Build from source
