@@ -23,17 +23,28 @@
 # open on it right now, and activity does NOT advance just because someone is
 # watching — reaping those would close sessions out from under a live viewer.
 #
+# Only sessions ttyd-pro created are ever touched. ttyd-session.sh registers
+# every session it attaches to under $STATE/sessions/<name>, and a session with
+# no entry there is left alone no matter how idle it is — the gateway's
+# `claude setup-token` window and anything started by hand at an SSH prompt are
+# not ours to close. `--all` overrides that for a one-off sweep.
+#
 # Usage:
 #   ttyd-reap-idle.sh [--dry-run] [--idle <spec>] [--keep a,b] [--prune-days N]
 #
 #   --dry-run          report what would be reaped, touch nothing
 #   --idle <spec>      idle threshold: 3d, 12h, 90m, or plain seconds
-#                      (default: $TTYD_REAP_IDLE, else 3d)
+#                      (default: $TTYD_REAP_IDLE, else 12h)
 #   --keep a,b         never reap these session names (adds to $TTYD_REAP_KEEP)
+#   --all              consider every tmux session, not just ttyd-pro's
 #   --prune-days N     also drop snapshots older than N days (default 30)
 #   --quiet            log to the file only, nothing on stdout
 #
-# A session can also opt out of reaping on its own:
+# A single session can carry its own threshold, set from the URL that opened it
+# (`?arg=idle:1h`) or by hand:
+#   tmux set-option -t <session> @ttyd-idle 1h
+#
+# A session can also opt out of reaping entirely — `?arg=noreap`, or:
 #   tmux set-option -t <session> @ttyd-no-reap 1
 #
 # Environment:
@@ -52,7 +63,8 @@ LOG_FILE="$STATE_DIR/reap.log"
 
 DRY_RUN=0
 QUIET=0
-IDLE_SPEC="${TTYD_REAP_IDLE:-3d}"
+REAP_ALL=0
+IDLE_SPEC="${TTYD_REAP_IDLE:-12h}"
 KEEP_RAW="${TTYD_REAP_KEEP:-}"
 PRUNE_DAYS="${TTYD_SNAPSHOT_KEEP_DAYS:-30}"
 
@@ -94,6 +106,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --quiet) QUIET=1; shift ;;
+        --all) REAP_ALL=1; shift ;;
         --idle) IDLE_SPEC="${2:-}"; shift 2 ;;
         --idle=*) IDLE_SPEC="${1#*=}"; shift ;;
         --keep) KEEP_RAW="$KEEP_RAW,${2:-}"; shift 2 ;;
@@ -125,6 +138,28 @@ if [ -n "${TMUX:-}" ]; then
     SELF_SESSION="$(tmux display-message -p '#{session_name}' 2>/dev/null)"
 fi
 
+OWNED_DIR="$STATE_DIR/sessions"
+
+# Per-session settings from the registry, into REG_*. Absent file → not ours.
+REG_OWNED=0
+REG_IDLE=""
+REG_NOREAP=0
+read_registry() {
+    local name="$1" k v
+    REG_OWNED=0
+    REG_IDLE=""
+    REG_NOREAP=0
+    [ -f "$OWNED_DIR/$name" ] || return 0
+    REG_OWNED=1
+    while IFS='=' read -r k v; do
+        case "$k" in
+            idle) REG_IDLE="$v" ;;
+            noreap) [ "$v" = "1" ] && REG_NOREAP=1 ;;
+        esac
+    done <"$OWNED_DIR/$name"
+    return 0
+}
+
 is_kept() {
     local name="$1" entry
     [ -n "$name" ] || return 1
@@ -143,21 +178,54 @@ NOW="$(date +%s)"
 reaped=0
 kept=0
 failed=0
+skipped_foreign=0
+session_idle=0
+session_spec=""
+parsed=""
+candidate=""
 
 # Read every session up front. Killing sessions while iterating over a live
 # `tmux list-sessions` pipe would have the shell reading from a command whose
 # output describes a world it is concurrently changing.
-sessions="$(tmux list-sessions -F "#{session_name}${TAB}#{session_attached}${TAB}#{session_activity}${TAB}#{session_windows}${TAB}#{@ttyd-no-reap}" 2>/dev/null)"
+# The three @-options are prefixed with ':' because they are usually UNSET, and
+# `read` with IFS=$'\t' treats tab as IFS *whitespace*: it collapses a run of
+# tabs into one delimiter and every field after an empty one shifts left. The
+# colon keeps each field non-empty and is stripped below — the same trick
+# tmux-resurrect uses on its own optional columns.
+sessions="$(tmux list-sessions -F "#{session_name}${TAB}#{session_attached}${TAB}#{session_activity}${TAB}#{session_windows}${TAB}:#{@ttyd-no-reap}${TAB}:#{@ttyd-pro}${TAB}:#{@ttyd-idle}" 2>/dev/null)"
 
-while IFS="$TAB" read -r name attached activity windows no_reap; do
+while IFS="$TAB" read -r name attached activity windows no_reap is_ours own_idle; do
     [ -n "$name" ] || continue
+    no_reap="${no_reap#:}"
+    is_ours="${is_ours#:}"
+    own_idle="${own_idle#:}"
+
+    read_registry "$name"
+
+    # Ours if the registry says so, or if this tmux server still carries the
+    # marker. Either is proof enough; requiring both would drop sessions whose
+    # registry entry was cleaned up, or that a resurrect restore rebuilt
+    # without their options.
+    if [ "$REAP_ALL" = 0 ] && [ "$REG_OWNED" = 0 ] && [ "$is_ours" != "1" ]; then
+        skipped_foreign=$((skipped_foreign + 1))
+        continue
+    fi
+
+    # Self-heal a session the registry owns but tmux has forgotten — the case
+    # after a reboot, where resurrect rebuilt it without its options.
+    if [ "$REG_OWNED" = 1 ] && [ "$is_ours" != "1" ] && [ "$DRY_RUN" = 0 ]; then
+        # Trailing colon: `set-option -t =name` reports "no such session"
+        # where `has-session -t =name` succeeds. See mark_owned() in
+        # ttyd-session.sh.
+        tmux set-option -t "=$name:" @ttyd-pro 1 2>/dev/null
+    fi
 
     if [ "${attached:-0}" != "0" ]; then
         kept=$((kept + 1))
         continue
     fi
-    if [ -n "${no_reap:-}" ] && [ "$no_reap" != "0" ]; then
-        log "keep    $name (opted out via @ttyd-no-reap)"
+    if { [ -n "${no_reap:-}" ] && [ "$no_reap" != "0" ]; } || [ "$REG_NOREAP" = 1 ]; then
+        log "keep    $name (opted out)"
         kept=$((kept + 1))
         continue
     fi
@@ -166,6 +234,20 @@ while IFS="$TAB" read -r name attached activity windows no_reap; do
         continue
     fi
 
+    # A per-session threshold beats the global one. The tmux option wins over
+    # the registry: it is what a URL just set, the registry is what it was.
+    session_idle="$IDLE_SECONDS"
+    session_spec="$IDLE_SPEC"
+    for candidate in "$own_idle" "$REG_IDLE"; do
+        [ -n "$candidate" ] || continue
+        if parsed="$(parse_duration "$candidate")" && [ "$parsed" -gt 0 ] 2>/dev/null; then
+            session_idle="$parsed"
+            session_spec="$candidate"
+            break
+        fi
+        log "warn    $name has an unparseable idle value '$candidate', using $IDLE_SPEC"
+    done
+
     # A session with no activity timestamp is one tmux could not describe;
     # leave it alone rather than guess it is idle.
     case "${activity:-}" in
@@ -173,14 +255,14 @@ while IFS="$TAB" read -r name attached activity windows no_reap; do
     esac
 
     idle=$((NOW - activity))
-    if [ "$idle" -lt "$IDLE_SECONDS" ]; then
+    if [ "$idle" -lt "$session_idle" ]; then
         kept=$((kept + 1))
         continue
     fi
 
     idle_h=$((idle / 3600))
     if [ "$DRY_RUN" = 1 ]; then
-        log "would reap $name (idle ${idle_h}h, ${windows} windows)"
+        log "would reap $name (idle ${idle_h}h >= ${session_spec}, ${windows} windows)"
         reaped=$((reaped + 1))
         continue
     fi
@@ -207,5 +289,5 @@ if [ "$DRY_RUN" = 0 ] && [ -n "$PRUNE_DAYS" ]; then
     done
 fi
 
-log "done: ${reaped} reaped, ${kept} kept, ${failed} failed (threshold ${IDLE_SPEC})"
+log "done: ${reaped} reaped, ${kept} kept, ${skipped_foreign} not ours, ${failed} failed (threshold ${IDLE_SPEC})"
 [ "$failed" = 0 ]

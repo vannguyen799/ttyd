@@ -26,6 +26,11 @@
 #                         passing any required sandbox/approval flags.
 #   claude                run `claude` (no args) on first-create
 #   claude:<args>         run `claude <args>` on first-create
+#   idle:<spec>           per-session reap threshold (3d, 12h, 90m, seconds),
+#                         overriding the reaper's default for this session only.
+#                         Sticky: set once, it survives later opens of the same
+#                         name that do not pass idle: again.
+#   noreap                never reap this session, whatever its idle time
 #
 # Session spec (optional — default = tmux main):
 #   (none)                tmux new -A -s main
@@ -40,6 +45,8 @@
 #   ?arg=cwd:/home/user/MetrixCRM&arg=codex&arg=crm
 #                                         cd + tmux "crm" + codex on first-create
 #   ?arg=screen&arg=build                 screen "build"
+#   ?arg=idle:1h&arg=name=scratch         tmux "scratch", reaped after 1h idle
+#   ?arg=noreap&arg=name:build-box        tmux "build-box", never reaped
 #
 # Notes:
 #   • First-create vs attach: if the tmux session already exists, we attach
@@ -50,6 +57,9 @@
 #     persistence layer can resume that exact conversation after a reboot
 #     (see resurrect-agent-hook.sh).
 #   • Session names are sanitized: only [A-Za-z0-9._-], max 64 chars.
+#   • Every session this wrapper attaches to is registered under
+#     $STATE/sessions/<name>. The idle reaper only ever touches sessions in
+#     that registry, so tmux sessions started by anything else are left alone.
 #   • Agent args are split on whitespace then %q-quoted to prevent
 #     injection into the tmux shell command.
 # ══════════════════════════════════════════════════════════════
@@ -71,6 +81,21 @@ LIBEXEC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../libexec" && pwd)"
 # a name with no live tmux session may still have one on disk waiting to be
 # rebuilt (see ttyd-snapshot.sh).
 SNAPSHOT_TOOL="$(dirname "${BASH_SOURCE[0]}")/ttyd-snapshot.sh"
+
+# Registry of sessions this wrapper owns, one file per session name.
+#
+# The idle reaper only ever touches sessions listed here, so a tmux session
+# started by something else — the gateway's `claude setup-token` window, a
+# hand-rolled `tmux new` at an SSH prompt — is never closed out from under its
+# owner.
+#
+# A file rather than only a tmux option, because tmux-resurrect does not save
+# session options: after a reboot it rebuilds every session and an
+# `@ttyd-pro` marker set at creation is simply gone, which would quietly
+# exempt every restored session from reaping forever. The file survives that,
+# and carries the per-session `idle:`/`noreap` settings for the same reason.
+STATE_DIR="${TTYD_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ttyd}"
+OWNED_DIR="$STATE_DIR/sessions"
 
 SHELL_CMD="${SHELL:-/bin/bash}"
 
@@ -105,12 +130,23 @@ AGENT_CMD=""
 AGENT_ARGS=""
 NAME=""
 NAME_EXPLICIT=0
+IDLE_SPEC=""
+NO_REAP=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         name:*)
             NAME="${1#name:}"
             NAME_EXPLICIT=1
+            shift
+            ;;
+        idle:*)
+            # Per-session reap threshold, overriding the reaper's default.
+            IDLE_SPEC="${1#idle:}"
+            shift
+            ;;
+        noreap)
+            NO_REAP=1
             shift
             ;;
         cwd:*)
@@ -223,6 +259,55 @@ fi
 # name is a prefix of the other (e.g. "crm" vs "crm-terminal") collide.
 TGT="=$NAME"
 
+# Claim the session for ttyd-pro and record its reap settings.
+#
+# Called on every path that reaches an attach — create, plain attach, and
+# snapshot restore alike — because ownership has to survive a tmux server
+# restart that rebuilt the session behind our back, and because a URL carrying
+# a new `idle:` should update a session that already exists.
+#
+# `idle:` and `noreap` are only written when the URL actually asked for them:
+# reopening a session with a bare `?arg=name:x` must not silently clear a
+# threshold set earlier.
+mark_owned() {
+    mkdir -p "$OWNED_DIR" 2>/dev/null || return 0
+
+    local file="$OWNED_DIR/$NAME" prev_idle="" prev_noreap=""
+    if [ -f "$file" ]; then
+        while IFS='=' read -r k v; do
+            case "$k" in
+                idle) prev_idle="$v" ;;
+                noreap) prev_noreap="$v" ;;
+            esac
+        done <"$file"
+    fi
+
+    [ -n "$IDLE_SPEC" ] && prev_idle="$IDLE_SPEC"
+    [ "$NO_REAP" = 1 ] && prev_noreap=1
+
+    {
+        printf 'owner=ttyd-pro\n'
+        printf 'name=%s\n' "$NAME"
+        printf 'seen=%s\n' "$(date +%s)"
+        printf 'idle=%s\n' "$prev_idle"
+        printf 'noreap=%s\n' "${prev_noreap:-0}"
+    } >"$file" 2>/dev/null
+
+    # Mirror onto the session itself so `tmux show-options` and the gateway's
+    # runtime panel can see the same thing without reading our state directory.
+    #
+    # The trailing colon is load-bearing, not a typo: `set-option -t =name`
+    # fails with "no such session" even where `has-session -t =name` succeeds,
+    # because set-option resolves its target as a session only once the name
+    # looks like one. `=name:` keeps the exact-match `=` and parses. (The
+    # set-titles calls above never hit this — `-g` makes them global and the
+    # target is ignored.)
+    tmux set-option -t "$TGT:" @ttyd-pro 1 2>/dev/null
+    [ -n "$prev_idle" ] && tmux set-option -t "$TGT:" @ttyd-idle "$prev_idle" 2>/dev/null
+    [ "${prev_noreap:-0}" = 1 ] && tmux set-option -t "$TGT:" @ttyd-no-reap 1 2>/dev/null
+    return 0
+}
+
 # Attach to a session that already exists, without re-running the agent CLI.
 # Never returns.
 attach_existing() {
@@ -240,6 +325,7 @@ attach_existing() {
     esac
     tmux set-option -t "$TGT" -g set-titles on 2>/dev/null
     tmux set-option -t "$TGT" -g set-titles-string "$TMUX_TITLES_STRING" 2>/dev/null
+    mark_owned
     set_browser_title "$TITLE"
     exec tmux attach-session -t "$TGT"
 }
@@ -311,5 +397,6 @@ fi
 
 tmux set-option -t "$TGT" -g set-titles on 2>/dev/null
 tmux set-option -t "$TGT" -g set-titles-string "$TMUX_TITLES_STRING" 2>/dev/null
+mark_owned
 set_browser_title "$TITLE"
 exec tmux attach-session -t "$TGT"
