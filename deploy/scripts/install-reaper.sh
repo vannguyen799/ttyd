@@ -7,7 +7,7 @@
 #   bash deploy/scripts/install-reaper.sh [OPTIONS]
 #
 # Options:
-#   -i, --idle SPEC     Idle threshold: 3d, 12h, 90m, seconds (default: 3d)
+#   -i, --idle SPEC     Idle threshold: 3d, 12h, 90m, seconds (default: 12h)
 #   -e, --env-file PATH Environment file (default: ~/.config/ttyd-reap.env)
 #   -N, --no-start      Install and enable, but don't start the timer now
 #   -u, --uninstall     Stop, disable and remove the units
@@ -29,7 +29,7 @@ FORK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ttyd-reap.env"
 ENV_EXAMPLE="$FORK_ROOT/deploy/systemd/ttyd-reap.env.example"
-IDLE="3d"
+IDLE="12h"
 DO_START=true
 UNINSTALL=false
 UNITS=(ttyd-reap-idle.service ttyd-reap-idle.timer)
