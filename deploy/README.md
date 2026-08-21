@@ -660,6 +660,120 @@ two devices at once resolves to whichever was touched last. A ttyd without
 
 ---
 
+## Idle Sessions: Park and Restore
+
+Every browser tab that opens `?arg=name:<x>` leaves a tmux session behind, and
+nothing used to close them. On this deployment twelve forgotten sessions were
+holding **3.5 GB** — on a 2-core box that is real memory and real CPU
+contention with the sessions still in use.
+
+So sessions that nobody has used are snapshotted and closed, and reopening the
+same name brings them back.
+
+### Why resurrect could not do this
+
+`tmux-resurrect` + `continuum` (see `config/tmux-persist.conf`) persist the tmux
+SERVER, not a session:
+
+* the save file is one global snapshot of **every** session at once,
+* continuum overwrites it every 5 minutes,
+* `@continuum-restore` only fires when the tmux **server** starts.
+
+Kill one session while the server keeps running and the next autosave rewrites
+the file without it — that session is gone from `last` for good, and there is no
+supported way to pull a single session out of an older save. Hence a second,
+per-session store.
+
+### ttyd-snapshot.sh — freeze/thaw one session
+
+```bash
+ttyd-snapshot.sh save <session> [reason]   # park it on disk
+ttyd-snapshot.sh restore <session>         # rebuild it (consumes the snapshot)
+ttyd-snapshot.sh list                      # what is parked
+ttyd-snapshot.sh has <session>             # exit 0 when a snapshot exists
+ttyd-snapshot.sh rm <session>
+ttyd-snapshot.sh prune [days]
+```
+
+```
+~/.local/state/ttyd/snapshots/<session>/
+  layout      window + pane lines in tmux-resurrect's own format
+  meta        saved_at / idle_at_save / created / reason
+  panes/w<n>.p<n>   scrollback captured at save time
+```
+
+`layout` is deliberately resurrect's format so `resurrect-agent-hook.sh` can be
+reused verbatim on it: it rewrites `claude --session-id <id>` into
+`claude --resume <id>` (and the codex equivalent), which is why a restored agent
+pane comes back **into its own conversation** instead of an empty one.
+
+| Comes back | Does not |
+|---|---|
+| window / pane layout | live process state |
+| each pane's working directory | anything held only in memory |
+| scrollback as it looked at save time | |
+| whitelisted programs (`@resurrect-processes`) relaunched | |
+| claude / codex panes resumed into their transcript | |
+
+Same contract as a reboot: a snapshot of the screen, not a checkpoint of memory.
+Agent panes skip the scrollback replay on purpose — the resumed transcript
+redraws the whole screen anyway, so replaying underneath it would be wiped
+before anyone saw it.
+
+### ttyd-reap-idle.sh — the sweep
+
+```bash
+ttyd-reap-idle.sh --dry-run            # what would go right now
+ttyd-reap-idle.sh --idle 3d            # snapshot + close anything idle 3 days
+ttyd-reap-idle.sh --keep main,build    # never these
+```
+
+Idleness is `session_activity`, which tmux bumps whenever a pane produces
+output — a session running a long job is never idle no matter how long it runs;
+a session parked at a shell prompt is idle from its last command.
+
+**Attached sessions are always skipped.** `session_attached > 0` means a browser
+tab is open on it right now, and activity does not advance just because someone
+is watching. A session can also opt out from the inside:
+
+```bash
+tmux set-option -t <session> @ttyd-no-reap 1
+```
+
+Snapshot first, kill second, and only on success — a kill whose snapshot failed
+is exactly the data loss the script exists to prevent.
+
+### Installing the sweep
+
+```bash
+bash deploy/scripts/install-reaper.sh --idle 3d
+```
+
+A systemd **user** timer, not cron: this host ships no `crontab` binary at all,
+and the reaper has to run as the owner of the tmux server to see its sessions. A
+user unit satisfies both and needs no root — it does need `loginctl
+enable-linger <user>`, which the installer checks for and warns about.
+
+```bash
+systemctl --user list-timers ttyd-reap-idle.timer
+journalctl --user -u ttyd-reap-idle.service -n 50
+tail ~/.local/state/ttyd/reap.log
+ttyd-snapshot.sh list
+bash deploy/scripts/install-reaper.sh --uninstall
+```
+
+Threshold and keep-list live in `~/.config/ttyd-reap.env`, so changing them
+never means editing a unit.
+
+### Reopening
+
+Nothing extra to do. `ttyd-session.sh` checks for a snapshot whenever the
+requested name has no live session, restores it and attaches. A snapshot that
+fails to restore is not fatal — the wrapper logs a warning and creates the
+session fresh rather than leaving the user with no terminal.
+
+---
+
 ## Files Structure
 
 ```
@@ -670,6 +784,9 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     ├── systemd/
     │   ├── ttyd.service      # Unit template (@PLACEHOLDER@s filled in at install)
     │   ├── ttyd.env.example  # Seed for /etc/default/ttyd (port, creds, landing session)
+    │   ├── ttyd-reap-idle.service # Idle sweep (USER unit, rendered by install-reaper.sh)
+    │   ├── ttyd-reap-idle.timer   # Hourly trigger for the sweep
+    │   ├── ttyd-reap.env.example  # Seed for ~/.config/ttyd-reap.env (threshold, keep list)
     │   └── ttyd-deploy.sudoers.example # Password-free `systemctl restart ttyd`, nothing more
     ├── scripts/
     │   ├── setup-ubuntu-vps.sh # One-shot build + install + start on a fresh VPS
@@ -680,7 +797,10 @@ ttyd/                     # this ttyd fork (C source + html/ vkbd frontend)
     │   ├── start-ttyd-ui.sh  # DEV ONLY: webpack hot-reload server on :9000
     │   ├── stop-ttyd-ui.sh   # Stop the dev server
     │   ├── resurrect-agent-hook.sh # Restore claude/codex panes into their own conversation
-    │   └── ttyd-session.sh   # URL-arg routing → tmux / screen
+    │   ├── ttyd-snapshot.sh  # Freeze/thaw ONE tmux session (layout + scrollback + agent ids)
+    │   ├── ttyd-reap-idle.sh # Snapshot and close sessions nobody has used
+    │   ├── install-reaper.sh # Install the reaper as a systemd USER timer (no sudo)
+    │   └── ttyd-session.sh   # URL-arg routing → tmux / screen (restores a snapshot if one exists)
     ├── libexec/
     │   └── xclip             # X11-free fallback for browser pages with the old UI loaded
     └── README.md             # This file
