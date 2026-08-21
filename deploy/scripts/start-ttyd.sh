@@ -50,9 +50,20 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Generate random password
+# Generate random password.
+#
+# Deliberately built from a BOUNDED read rather than the obvious
+# `cat /dev/urandom | tr -dc … | fold | head -n 1`: that pipeline relies on
+# SIGPIPE to stop the reader once `head` has its line, and systemd runs
+# services with IgnoreSIGPIPE=yes by default. Under the service manager the
+# unbounded `cat /dev/urandom` therefore never dies — it spins on a core and
+# the script hangs before it ever reaches `exec ttyd`. Every process here
+# terminates on its own instead. 4096 random bytes yield ~950 alphanumerics,
+# so the 8 we slice off are never short.
 generate_password() {
-    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1
+    local chars
+    chars=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9')
+    printf '%s' "${chars:0:8}"
 }
 
 # Default values.
