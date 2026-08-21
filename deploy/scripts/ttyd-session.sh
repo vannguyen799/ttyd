@@ -67,6 +67,11 @@ fi
 # use Claude's @file syntax and never invoke this helper.
 LIBEXEC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../libexec" && pwd)"
 
+# Parked sessions. ttyd-reap-idle.sh snapshots a session before closing it, so
+# a name with no live tmux session may still have one on disk waiting to be
+# rebuilt (see ttyd-snapshot.sh).
+SNAPSHOT_TOOL="$(dirname "${BASH_SOURCE[0]}")/ttyd-snapshot.sh"
+
 SHELL_CMD="${SHELL:-/bin/bash}"
 
 sanitize() {
@@ -218,8 +223,9 @@ fi
 # name is a prefix of the other (e.g. "crm" vs "crm-terminal") collide.
 TGT="=$NAME"
 
-# Existing session → always just attach (don't re-run the agent CLI).
-if tmux has-session -t "$TGT" 2>/dev/null; then
+# Attach to a session that already exists, without re-running the agent CLI.
+# Never returns.
+attach_existing() {
     # The saved browser route describes how the session was first created, not
     # necessarily what its pane runs today. Reflect the actual foreground
     # agent in OSC/title updates so image delivery cannot confuse Codex with
@@ -236,6 +242,25 @@ if tmux has-session -t "$TGT" 2>/dev/null; then
     tmux set-option -t "$TGT" -g set-titles-string "$TMUX_TITLES_STRING" 2>/dev/null
     set_browser_title "$TITLE"
     exec tmux attach-session -t "$TGT"
+}
+
+# Existing session → always just attach.
+if tmux has-session -t "$TGT" 2>/dev/null; then
+    attach_existing
+fi
+
+# No live session under this name — but the reaper may have parked one here.
+# Rebuilding it is what closes the loop: the browser asks for the same name it
+# used before and gets back its windows, working directories, scrollback and
+# agent conversations, instead of the blank shell a plain `new-session` would
+# hand over. A snapshot that fails to restore is not fatal; fall through and
+# create the session fresh rather than leaving the user with no terminal.
+if [ -x "$SNAPSHOT_TOOL" ] && "$SNAPSHOT_TOOL" has "$NAME"; then
+    printf 'restoring saved session %s...\n' "$NAME" >&2
+    if "$SNAPSHOT_TOOL" restore "$NAME" >/dev/null 2>&1 && tmux has-session -t "$TGT" 2>/dev/null; then
+        attach_existing
+    fi
+    echo "warn: could not restore the snapshot for '$NAME', starting a fresh session" >&2
 fi
 
 # Brand-new session.
