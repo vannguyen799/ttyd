@@ -1,0 +1,19 @@
+# Hourly check, not daily. The threshold is measured in days, so the interval
+# only decides how long a session lingers *past* it — hourly means a session is
+# closed within an hour of crossing the line, and a run that finds nothing to do
+# costs a handful of tmux calls.
+#
+# Persistent=true so a box that was asleep at the scheduled minute catches up on
+# the next boot instead of silently skipping the window.
+
+[Unit]
+Description=Hourly sweep for idle ttyd/tmux sessions
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+Persistent=true
+Unit=ttyd-reap-idle.service
+
+[Install]
+WantedBy=timers.target
