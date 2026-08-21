@@ -516,6 +516,8 @@ The wrapper parses args as **`[modifier]... [session-type] [name]`**.
 | `codex:<args>` | Same as `codex`, plus forward `<args>` to Codex. Args are parsed with shell-style quoting (single/double quotes preserve spaces), then `%q`-quoted for safe embedding. The server injects no default flags. |
 | `claude` | On first-create of a tmux session, run `claude` (no args). Ignored for `screen`. |
 | `claude:<args>` | Same as `claude`, plus forward `<args>` to Claude. Args are parsed with shell-style quoting (single/double quotes preserve spaces), then `%q`-quoted for safe embedding. The server injects no default flags. |
+| `idle:<spec>` | Reap this session after `<spec>` idle (`3d`, `12h`, `90m`, bare seconds) instead of the global default. Sticky — it survives later opens that don't repeat it. See [Idle Sessions](#idle-sessions-park-and-restore). |
+| `noreap` | Never reap this session, whatever its idle time. Also sticky. |
 
 Examples:
 
@@ -526,6 +528,8 @@ Examples:
 | `?arg=cwd:/home/user/proj&arg=codex&arg=crm` | cd + tmux `crm` + codex |
 | `?arg=codex:--help&arg=q` | tmux `q`; runs `codex --help`, then leaves the session in the shell |
 | `?arg=claude&arg=work` | tmux `work`; first-create runs `claude` |
+| `?arg=idle:1h&arg=name:scratch` | tmux `scratch`, auto-closed after 1h idle |
+| `?arg=noreap&arg=name:build-box` | tmux `build-box`, never auto-closed |
 
 > **First-create vs attach:** the `codex`/`claude` modifier only runs on the initial session creation. Reattaching to an existing session never re-runs the agent CLI.
 >
@@ -533,6 +537,7 @@ Examples:
 
 - Opening the same URL in two tabs attaches both to the same session (shared view).
 - Session names are sanitized: only `A-Z a-z 0-9 . _ -` are kept, max 64 chars.
+- Every session the wrapper attaches to is registered under `$STATE/sessions/<name>`. Only registered sessions are candidates for the idle reaper — tmux sessions started by anything else are left alone.
 - If `tmux`/`screen` is missing, the wrapper falls back to `$SHELL`.
 
 > ttyd does not route on URL path segments natively. The `?arg=` query-string form is the native way to pass routing info. If you need literal `/screen/<name>` path URLs, put nginx/caddy in front and rewrite `/screen/NAME` → `/?arg=screen&arg=NAME`.
@@ -724,9 +729,12 @@ before anyone saw it.
 
 ```bash
 ttyd-reap-idle.sh --dry-run            # what would go right now
-ttyd-reap-idle.sh --idle 3d            # snapshot + close anything idle 3 days
+ttyd-reap-idle.sh --idle 12h           # snapshot + close anything idle 12 hours
 ttyd-reap-idle.sh --keep main,build    # never these
+ttyd-reap-idle.sh --all                # ignore the ownership filter for one run
 ```
+
+Default threshold is **12h**.
 
 Idleness is `session_activity`, which tmux bumps whenever a pane produces
 output — a session running a long job is never idle no matter how long it runs;
@@ -734,19 +742,79 @@ a session parked at a shell prompt is idle from its last command.
 
 **Attached sessions are always skipped.** `session_attached > 0` means a browser
 tab is open on it right now, and activity does not advance just because someone
-is watching. A session can also opt out from the inside:
-
-```bash
-tmux set-option -t <session> @ttyd-no-reap 1
-```
+is watching.
 
 Snapshot first, kill second, and only on success — a kill whose snapshot failed
 is exactly the data loss the script exists to prevent.
 
+#### Only ttyd-pro's own sessions
+
+The reaper never touches a session it did not create. `ttyd-session.sh`
+registers every session it attaches to:
+
+```
+~/.local/state/ttyd/sessions/<name>     owner / idle / noreap
+```
+
+and anything absent from that registry is skipped, however idle — the gateway's
+`claude setup-token` window, a hand-rolled `tmux new` at an SSH prompt, and any
+other tenant of the same tmux server are not ours to close. `--all` overrides it
+for a deliberate one-off sweep.
+
+A registry file rather than only a tmux option, because **tmux-resurrect does
+not save session options**: after a reboot it rebuilds every session and an
+`@ttyd-pro` marker set at creation is simply gone, which would quietly exempt
+every restored session forever. The option is still set as a mirror, so
+`tmux show-options` and the gateway's runtime panel can see ownership without
+reading this directory — and the reaper re-applies it when it finds a
+registered session that tmux has forgotten.
+
+#### Adopting sessions that predate the registry
+
+A session created before this existed has no registry entry, so the reaper
+skips it — and an idle session is never reopened, so it never gets one. Adopt
+the ones that are yours, by name, once:
+
+```bash
+for s in vt vtspec build-box; do
+    mkdir -p ~/.local/state/ttyd/sessions
+    printf 'owner=ttyd-pro\nname=%s\nseen=%s\nidle=\nnoreap=0\n' \
+        "$s" "$(date +%s)" > ~/.local/state/ttyd/sessions/"$s"
+    tmux set-option -t "=$s:" @ttyd-pro 1
+done
+```
+
+Name them explicitly rather than looping over `tmux list-sessions`: adopting a
+session is what puts it under automatic deletion, and the whole point of the
+registry is that the other tenants of this tmux server are never swept up by
+accident. To hand one back, `rm` its file and
+`tmux set-option -t "=<name>:" -u @ttyd-pro`.
+
+#### Per-session settings, from the URL
+
+Both are sticky: set once, they survive later opens of the same name that do not
+repeat them.
+
+| URL | Effect |
+|---|---|
+| `?arg=name:scratch&arg=idle:1h` | close this session after 1h idle, not 12h |
+| `?arg=name:build&arg=noreap` | never close this session |
+
+By hand, note the trailing colon on the target — `set-option -t =name` reports
+"no such session" where `has-session -t =name` succeeds:
+
+```bash
+tmux set-option -t <session>: @ttyd-idle 1h
+tmux set-option -t <session>: @ttyd-no-reap 1
+```
+
+A per-session threshold beats both `--idle` and `TTYD_REAP_IDLE`; the log line
+says which one applied (`idle 14h >= 1h`).
+
 ### Installing the sweep
 
 ```bash
-bash deploy/scripts/install-reaper.sh --idle 3d
+bash deploy/scripts/install-reaper.sh --idle 12h
 ```
 
 A systemd **user** timer, not cron: this host ships no `crontab` binary at all,
