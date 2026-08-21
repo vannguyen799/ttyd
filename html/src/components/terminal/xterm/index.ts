@@ -1465,8 +1465,14 @@ color:#f0f0f0;background:rgba(16,16,16,0.55);border:3px dashed rgba(240,240,240,
                 this.writeFunc(data);
                 break;
             case Command.SET_WINDOW_TITLE:
+                // The server's opening banner: `<launch command> (<hostname>)`,
+                // built once in protocol.c from ttyd's own argv. It is identical
+                // for every socket, so it must NOT reach the tab chip — it would
+                // stamp all tabs in a group with the same "tmux new -A -s main
+                // (host)" and bury the session name the URL asked for. Only the
+                // wrapper's per-session OSC-0 title labels a chip (see
+                // initListeners). Kept as the document-title suffix.
                 this.title = textDecoder.decode(data);
-                this.onTitle?.(this.title);
                 if (this.isActive()) document.title = this.title;
                 break;
             case Command.SET_PREFERENCES:
