@@ -157,12 +157,17 @@ git push origin v1.11.0
 gh workflow run release.yml -f tag=v1.11.0
 ```
 
-**The dispatch is not optional here.** `release.yml` does declare `on: push: tags`, but this
-repository is a fork and push events have never triggered a workflow run in it — every release in
-its history, v1.8.0 and v1.9.0 included, was published by `workflow_dispatch`. Pushing the tag
-alone leaves no run queued and no release created; v1.10.0 was tagged and never published for
-exactly this reason. The workflow reads `inputs.tag || github.ref_name`, so the dispatched form
-builds the same tag.
+**Check that the tag actually started a run, and dispatch if it didn't.** `release.yml` declares
+`on: push: tags`, and push triggers do work here — a branch push and a tag push were both verified
+to fire workflows on 2026-08-21. But Actions has silently dropped events in this repository before:
+v1.10.0's tag produced no run at all and was never published, and its manually dispatched run then
+sat queued for 56 hours without starting. v1.8.0, v1.9.0 and v1.11.0 were all published by
+`workflow_dispatch` in the end. The workflow reads `inputs.tag || github.ref_name`, so the
+dispatched form builds the same tag — it is the reliable path when the tag push comes up empty.
+
+```bash
+gh run list --limit 3    # a release run should appear within a minute of the tag push
+```
 
 The dispatched run checks out the default branch, and its first step fails the build unless the
 tag matches `project(ttyd VERSION ...)` — so push the version-bump commit to `main` before
