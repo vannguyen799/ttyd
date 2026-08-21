@@ -15,10 +15,13 @@ Documentation=file://@FORK_ROOT@/deploy/scripts/ttyd-reap-idle.sh
 
 [Service]
 Type=oneshot
-# Idle threshold and the never-reap list live here so changing them does not
-# mean editing the unit. The leading "-" keeps the unit valid when it's absent.
-EnvironmentFile=-@ENV_FILE@
+# Order matters: systemd applies Environment= and EnvironmentFile= in the order
+# they appear and the later one wins. The install-time default goes FIRST so the
+# env file can override it — otherwise editing ~/.config/ttyd-reap.env would
+# have no effect, which is the opposite of why that file exists. The leading "-"
+# keeps the unit valid when the file is absent.
 Environment=TTYD_REAP_IDLE=@IDLE@
+EnvironmentFile=-@ENV_FILE@
 ExecStart=@FORK_ROOT@/deploy/scripts/ttyd-reap-idle.sh --quiet
 
 # The reaper walks every session on the server and shells out to tmux; if it
