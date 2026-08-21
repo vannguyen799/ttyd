@@ -1,0 +1,13 @@
+# Throwaway: does a plain `on: push` fire in this repository at all?
+# Delete once the question is answered.
+name: trigger-probe
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "push trigger works, ref=$GITHUB_REF sha=$GITHUB_SHA"
